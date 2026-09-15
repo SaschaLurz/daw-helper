@@ -1,0 +1,26 @@
+# Dependencies (none today, but npm will create this the moment one is added)
+node_modules/
+package-lock.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor and local tool state
+.vscode/
+.idea/
+*.swp
+.claude/settings.local.json
+
+# Local environment
+.env
+.env.*
+
+# Build output and scratch files
+dist/
+tmp/

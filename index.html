@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>DAW Helper</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='12.5' fill='none' stroke='%233ddc97' stroke-width='3'/%3E%3Crect x='14.5' y='8' width='3' height='16' rx='1.5' fill='%233ddc97'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app idle mode-tuner tempo-idle" id="app">
+    <header class="bar">
+      <div class="segmented" role="tablist" aria-label="Mode">
+        <button type="button" class="seg active" role="tab" aria-selected="true" data-mode="tuner">Tuner</button>
+        <button type="button" class="seg" role="tab" aria-selected="false" data-mode="tempo">Tempo</button>
+      </div>
+      <div class="field tuner-only">
+        <label for="device">Input</label>
+        <select id="device" title="Audio input device"></select>
+      </div>
+      <div class="field tuner-only" id="channel-field" hidden>
+        <label for="channel">Channel</label>
+        <select id="channel" title="Which input channel of the interface to listen to">
+          <option value="mix">1 + 2</option>
+          <option value="0">1</option>
+          <option value="1">2</option>
+        </select>
+      </div>
+      <div class="field tuner-only">
+        <label for="tuning">Tuning</label>
+        <select id="tuning"></select>
+      </div>
+      <div class="field tuner-only">
+        <label id="a4-label">A4</label>
+        <div class="stepper" role="group" aria-labelledby="a4-label">
+          <button type="button" id="a4-down" aria-label="Lower reference pitch">−</button>
+          <span id="a4">440</span>
+          <button type="button" id="a4-up" aria-label="Raise reference pitch">+</button>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <button type="button" class="ghost tuner-only running-only" id="stop">Stop</button>
+      <button type="button" class="ghost tempo-only" id="tempo-reset">Reset</button>
+    </header>
+
+    <div class="panel">
+      <div class="view tuner-only" id="tuner-view">
+        <section class="display" aria-live="polite">
+          <div class="note">
+            <span class="note-name" id="note-name">—</span>
+            <span class="note-octave" id="note-octave"></span>
+          </div>
+          <div class="freq" id="freq">Play a string</div>
+        </section>
+
+        <section class="meter">
+          <svg id="meter" viewBox="0 0 1000 170" aria-hidden="true"></svg>
+          <div class="hint" id="hint"></div>
+        </section>
+
+        <section class="strings" id="strings" aria-label="Strings"></section>
+
+        <footer class="level" aria-hidden="true">
+          <div class="level-bar"><div class="level-fill" id="level"></div></div>
+        </footer>
+      </div>
+
+      <div class="view tempo-only" id="tempo-view">
+        <section class="display" aria-live="polite">
+          <div class="bpm">
+            <span class="bpm-value" id="bpm">—</span>
+            <span class="bpm-unit">bpm</span>
+          </div>
+          <div class="freq" id="tempo-detail">Tap along to the beat</div>
+        </section>
+
+        <section class="tap-area">
+          <div class="tap-ring" id="tap-ring" aria-hidden="true"></div>
+          <button type="button" class="tap" id="tap" aria-label="Tap the beat">Tap</button>
+        </section>
+
+        <div class="hint" id="tempo-hint">Click, or press the space bar · pause to start over</div>
+      </div>
+
+      <div class="overlay" id="overlay">
+        <div class="card">
+          <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="2.5"/>
+            <rect x="14.75" y="8" width="2.5" height="16" rx="1.25" fill="currentColor"/>
+          </svg>
+          <h1>Tuner</h1>
+          <p>Plug in, pick your audio interface when the browser asks, and play a string.</p>
+          <button type="button" class="primary" id="start">Start listening</button>
+          <p class="error" id="error" hidden></p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="pitch.js"></script>
+  <script src="tempo.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
