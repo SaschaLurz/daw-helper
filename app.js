@@ -26,28 +26,9 @@
 (function () {
   'use strict';
 
-  // Strings in playing order, as MIDI notes. Names must make sense on their
-  // own: the closed menu shows the name without its group.
-  const TUNINGS = [
-    { id: 'standard', group: 'Guitar', name: 'Standard', notes: [40, 45, 50, 55, 59, 64] },
-    { id: 'drop-d', group: 'Guitar', name: 'Drop D', notes: [38, 45, 50, 55, 59, 64] },
-    { id: 'eb', group: 'Guitar', name: 'E♭ Standard', notes: [39, 44, 49, 54, 58, 63] },
-    { id: 'd', group: 'Guitar', name: 'D Standard', notes: [38, 43, 48, 53, 57, 62] },
-    { id: 'drop-c', group: 'Guitar', name: 'Drop C', notes: [36, 43, 48, 53, 57, 62] },
-    { id: 'dadgad', group: 'Guitar', name: 'DADGAD', notes: [38, 45, 50, 55, 57, 62] },
-    { id: 'open-g', group: 'Guitar', name: 'Open G', notes: [38, 43, 50, 55, 59, 62] },
-    { id: 'seven', group: 'Guitar', name: '7-string', notes: [35, 40, 45, 50, 55, 59, 64] },
-    { id: 'eight', group: 'Guitar', name: '8-string', notes: [30, 35, 40, 45, 50, 55, 59, 64] },
-    { id: 'bass', group: 'Bass', name: 'Bass', notes: [28, 33, 38, 43] },
-    { id: 'bass-drop-d', group: 'Bass', name: 'Bass Drop D', notes: [26, 33, 38, 43] },
-    { id: 'bass-eb', group: 'Bass', name: 'Bass E♭', notes: [27, 32, 37, 42] },
-    { id: 'bass-5', group: 'Bass', name: 'Bass 5-string', notes: [23, 28, 33, 38, 43] },
-    { id: 'bass-6', group: 'Bass', name: 'Bass 6-string', notes: [23, 28, 33, 38, 43, 48] },
-    { id: 'ukulele', group: 'Ukulele', name: 'Ukulele', notes: [67, 60, 64, 69] },
-    { id: 'ukulele-low-g', group: 'Ukulele', name: 'Low G uke', notes: [55, 60, 64, 69] },
-    { id: 'ukulele-baritone', group: 'Ukulele', name: 'Baritone uke', notes: [50, 55, 59, 64] },
-    { id: 'mandolin', group: 'Mandolin', name: 'Mandolin', notes: [55, 62, 69, 76] },
-  ];
+  // The instruments come from tunings.js; custom tunings are added from the settings.
+  const PRESET_TUNINGS = Tunings.PRESETS.map(Tunings.build);
+  const NEW_TUNING = '__new__';   // the menu entry that opens the custom-tuning editor
 
   const IN_TUNE_CENTS = 3;        // |cents| at or below this counts as in tune
   const HOLD_MS = 900;            // keep the last reading on screen this long after the note dies
@@ -99,6 +80,16 @@
     channelField: $('channel-field'),
     channel: $('channel'),
     tuning: $('tuning'),
+    tuningEdit: $('tuning-edit'),
+    tuningDialog: $('tuning-dialog'),
+    tuningDialogTitle: $('tuning-dialog-title'),
+    tuningForm: $('tuning-form'),
+    tuningName: $('tuning-name'),
+    tuningStrings: $('tuning-strings'),
+    tuningPreview: $('tuning-preview'),
+    tuningSave: $('tuning-save'),
+    tuningCancel: $('tuning-cancel'),
+    tuningDelete: $('tuning-delete'),
     a4: $('a4'),
     a4Down: $('a4-down'),
     a4Up: $('a4-up'),
@@ -161,6 +152,7 @@
   };
 
   const settings = loadSettings();
+  let tunings = collectTunings();
   const audio = {
     ctx: null, stream: null, nodes: [], analyser: null, buffer: null, detector: null, channels: 1,
     capture: null, captureReady: false, workletLoad: null,
@@ -178,7 +170,7 @@
   };
 
   let running = false;
-  let lockedString = -1;          // index into the current tuning, or -1 for automatic
+  let lockedString = -1;          // index into the current tuning's targets, or -1 for automatic
   let history = [];               // recent { t, f } readings
   let currentFreq = 0;
   let inputLevel = 0;
@@ -195,7 +187,7 @@
   function loadSettings() {
     const defaults = {
       deviceId: '', channel: 'mix', tuning: 'standard', a4: 440, mode: 'tuner', theme: 'auto',
-      bpm: 120, beats: 4, subdivision: 1, countIn: 0, lengthUnit: 'ms',
+      bpm: 120, beats: 4, subdivision: 1, countIn: 0, lengthUnit: 'ms', customTunings: [],
     };
     let stored = {};
     try {
@@ -207,6 +199,10 @@
     s.bpm = Tempo.clampBpm(Number(s.bpm) || 120);
     if (!THEMES.includes(s.theme)) s.theme = 'auto';
     if (s.lengthUnit !== 'hz') s.lengthUnit = 'ms';
+    const isText = (v) => typeof v === 'string';
+    s.customTunings = Array.isArray(s.customTunings)
+      ? s.customTunings.filter((t) => t && isText(t.id) && isText(t.name) && isText(t.strings))
+      : [];
     return s;
   }
 
@@ -218,8 +214,15 @@
     }
   }
 
+  function collectTunings() {
+    const custom = settings.customTunings
+      .map((t) => Tunings.build(Object.assign({}, t, { group: 'Custom', custom: true })))
+      .filter(Boolean);
+    return PRESET_TUNINGS.concat(custom);
+  }
+
   function currentTuning() {
-    return TUNINGS.find((t) => t.id === settings.tuning) || TUNINGS[0];
+    return tunings.find((t) => t.id === settings.tuning) || tunings[0];
   }
 
   // ------------------------------------------------------------------- audio
@@ -408,7 +411,7 @@
   // get a lower search range, a gentler high-pass, and a longer window: at
   // least four cycles of the lowest string, never less than ≈ 85 ms.
   function detectorRange(sampleRate) {
-    const lowest = Pitch.midiToFreq(Math.min.apply(null, currentTuning().notes), settings.a4);
+    const lowest = Pitch.midiToFreq(currentTuning().lowest, settings.a4);
     const seconds = Math.max(0.085, 4 / lowest);
     let window = 2048;
     while (window < seconds * sampleRate && window < 32768) window *= 2;
@@ -540,18 +543,19 @@
       const exact = Pitch.freqToMidi(currentFreq, settings.a4);
       const note = Pitch.describe(currentFreq, settings.a4);
 
+      // Every string counts, octave partners on a 12-string included.
       let nearest = 0;
       let best = Infinity;
-      tuning.notes.forEach((m, i) => {
-        const d = Math.abs(exact - m);
+      tuning.targets.forEach((t, i) => {
+        const d = Math.abs(exact - t.midi);
         if (d < best) { best = d; nearest = i; }
       });
       const target = lockedString >= 0 ? lockedString : nearest;
-      const targetMidi = tuning.notes[target];
+      const targetMidi = tuning.targets[target].midi;
       const matched = note.midi === targetMidi;
       const cents = lockedString >= 0 ? (exact - targetMidi) * 100 : note.cents;
       const inTune = matched && Math.abs(cents) <= IN_TUNE_CENTS;
-      view = { note, cents, target, targetMidi, matched, inTune, exact, freq: currentFreq };
+      view = { note, cents, target, targetMidi, matched, inTune, exact, freq: currentFreq, flats: tuning.flats };
     }
 
     // Needle eases toward the reading; time-based so it feels the same at any refresh rate.
@@ -584,7 +588,7 @@
       return;
     }
 
-    ui.noteName.innerHTML = noteMarkup(view.note.name);
+    ui.noteName.innerHTML = noteMarkup(Tunings.noteName(view.note.midi, view.flats));
     ui.noteOctave.textContent = String(view.note.octave);
 
     // The readout is always relative to the nearest note; only the meter follows a locked string.
@@ -595,7 +599,7 @@
     let hint;
     if (view.inTune) hint = 'In tune';
     else if (view.matched) hint = view.cents < 0 ? 'Tune up ↑' : 'Tune down ↓';
-    else hint = `${view.exact < view.targetMidi ? 'Tune up ↑' : 'Tune down ↓'} to ${noteLabel(view.targetMidi)}`;
+    else hint = `${view.exact < view.targetMidi ? 'Tune up ↑' : 'Tune down ↓'} to ${noteLabel(view.targetMidi, view.flats)}`;
     if (lockedString >= 0) hint += ' · locked';
     ui.hint.textContent = hint;
 
@@ -608,9 +612,9 @@
   }
 
   function idleHint() {
-    const notes = currentTuning().notes;
-    if (tone.string >= 0) return `Playing ${noteLabel(notes[tone.string])} · click it again to stop`;
-    if (lockedString >= 0) return `Locked to ${noteLabel(notes[lockedString])}`;
+    const { targets, flats } = currentTuning();
+    if (tone.string >= 0) return `Playing ${noteLabel(targets[tone.string].midi, flats)} · click it again to stop`;
+    if (lockedString >= 0) return `Locked to ${noteLabel(targets[lockedString].midi, flats)}`;
     if (tone.on) return 'Click a string to hear it';
     return '';
   }
@@ -619,8 +623,8 @@
     return name.length > 1 ? `${name[0]}<sup>${name.slice(1)}</sup>` : name;
   }
 
-  function noteLabel(midi) {
-    return `${Pitch.noteName(midi)}${Pitch.noteOctave(midi)}`;
+  function noteLabel(midi, flats) {
+    return Tunings.noteLabel(midi, flats);
   }
 
   function clamp(v, lo, hi) {
@@ -830,7 +834,7 @@
     syncOverlay();
   }
 
-  const toneFrequency = (i) => Pitch.midiToFreq(currentTuning().notes[i], settings.a4);
+  const toneFrequency = (i) => Pitch.midiToFreq(currentTuning().targets[i].midi, settings.a4);
 
   function startTone(i) {
     stopTone();
@@ -1583,16 +1587,24 @@
     svg.appendChild(needle);
   }
 
+  // One column per course; a course's other strings (a 12-string's octave
+  // strings) sit smaller under the main one.
   function buildStrings() {
     const tuning = currentTuning();
     ui.strings.innerHTML = '';
-    ui.strings.style.setProperty('--n', tuning.notes.length);
-    stringEls = tuning.notes.map((midi, i) => {
+    ui.strings.style.setProperty('--n', tuning.courses.length);
+    const columns = tuning.courses.map(() => {
+      const column = document.createElement('div');
+      column.className = 'course';
+      ui.strings.appendChild(column);
+      return column;
+    });
+    stringEls = tuning.targets.map((t, i) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'string';
-      button.innerHTML = `<span class="s-name">${noteMarkup(Pitch.noteName(midi))}</span><span class="s-oct">${Pitch.noteOctave(midi)}</span>`;
-      button.title = `${Pitch.midiToFreq(midi, settings.a4).toFixed(2)} Hz — click to ${tone.on ? 'hear it and lock the tuner to it' : 'lock the tuner to this string'}`;
+      button.className = t.main ? 'string' : 'string partner';
+      button.innerHTML = `<span class="s-name">${noteMarkup(Tunings.noteName(t.midi, tuning.flats))}</span><span class="s-oct">${Tunings.noteOctave(t.midi)}</span>`;
+      button.title = `${Pitch.midiToFreq(t.midi, settings.a4).toFixed(2)} Hz${t.main ? '' : ', the other string of this course'} — click to ${tone.on ? 'hear it and lock the tuner to it' : 'lock the tuner to this string'}`;
       button.addEventListener('click', () => {
         const release = lockedString === i;
         lockedString = release ? -1 : i;
@@ -1602,7 +1614,7 @@
         }
         updateLockMarks();
       });
-      ui.strings.appendChild(button);
+      columns[t.course].appendChild(button);
       return button;
     });
     updateLockMarks();
@@ -1626,16 +1638,94 @@
   }
 
   function fillTunings() {
+    ui.tuning.innerHTML = '';
     let group = null;
-    TUNINGS.forEach((t) => {
-      if (!group || group.label !== t.group) {
-        group = document.createElement('optgroup');
-        group.label = t.group;
-        ui.tuning.appendChild(group);
-      }
+    const addGroup = (label) => {
+      group = document.createElement('optgroup');
+      group.label = label;
+      ui.tuning.appendChild(group);
+    };
+    tunings.forEach((t) => {
+      if (!group || group.label !== t.group) addGroup(t.group);
       group.appendChild(new Option(t.name, t.id));
     });
+    if (group.label !== 'Custom') addGroup('Custom');
+    group.appendChild(new Option('New custom tuning…', NEW_TUNING));
     ui.tuning.value = currentTuning().id;
+    ui.tuningEdit.hidden = !currentTuning().custom;
+  }
+
+  function selectTuning(id) {
+    settings.tuning = id;
+    saveSettings();
+    lockedString = -1;
+    stopTone();
+    ui.tuning.value = currentTuning().id;
+    ui.tuningEdit.hidden = !currentTuning().custom;
+    buildStrings();
+    if (running && audio.stream) {
+      resetReadings();
+      buildGraph();   // the detection range follows the tuning
+    }
+  }
+
+  // ------------------------------------------------------------ custom tunings
+
+  let editing = null;   // the custom tuning in the editor, or null for a new one
+
+  function openTuningEditor(tuning) {
+    editing = tuning;
+    ui.tuningDialogTitle.textContent = tuning ? 'Edit tuning' : 'New tuning';
+    ui.tuningName.value = tuning ? tuning.name : '';
+    ui.tuningName.placeholder = tuning ? tuning.name : `Custom ${settings.customTunings.length + 1}`;
+    // A new tuning starts from the current one, usually the closest to what's wanted.
+    ui.tuningStrings.value = tuning ? tuning.strings : currentTuning().strings;
+    ui.tuningDelete.hidden = !tuning;
+    previewTuning();
+    if (ui.tuningDialog.showModal) ui.tuningDialog.showModal();
+    else ui.tuningDialog.setAttribute('open', '');
+    ui.tuningName.focus();
+  }
+
+  function closeTuningEditor() {
+    if (ui.tuningDialog.close) ui.tuningDialog.close();
+    else ui.tuningDialog.removeAttribute('open');
+  }
+
+  function previewTuning() {
+    const parsed = Tunings.parseTuning(ui.tuningStrings.value);
+    ui.tuningSave.disabled = !!parsed.error;
+    ui.tuningPreview.innerHTML = parsed.error
+      ? `<p class="dlg-error">${esc(parsed.error)}</p>`
+      : parsed.courses.map((c) => `<span class="chip">${esc(Tunings.courseLabel(c, parsed.flats))}</span>`).join('');
+  }
+
+  function saveTuning() {
+    const strings = ui.tuningStrings.value.trim().replace(/[\s,]+/g, ' ');
+    if (Tunings.parseTuning(strings).error) return;
+    const name = ui.tuningName.value.trim() || ui.tuningName.placeholder;
+    let id;
+    if (editing) {
+      id = editing.id;
+      Object.assign(settings.customTunings.find((t) => t.id === id), { name, strings });
+    } else {
+      id = `custom-${Date.now().toString(36)}`;
+      settings.customTunings.push({ id, name, strings });
+    }
+    tunings = collectTunings();
+    fillTunings();
+    selectTuning(id);
+    closeTuningEditor();
+  }
+
+  function deleteTuning() {
+    if (!editing) return;
+    const id = editing.id;
+    settings.customTunings = settings.customTunings.filter((t) => t.id !== id);
+    tunings = collectTunings();
+    fillTunings();
+    selectTuning(settings.tuning === id ? PRESET_TUNINGS[0].id : settings.tuning);
+    closeTuningEditor();
   }
 
   function init() {
@@ -1804,16 +1894,21 @@
     });
 
     ui.tuning.addEventListener('change', () => {
-      settings.tuning = ui.tuning.value;
-      saveSettings();
-      lockedString = -1;
-      stopTone();
-      buildStrings();
-      if (running && audio.stream) {
-        resetReadings();
-        buildGraph();   // the detection range follows the tuning
+      if (ui.tuning.value === NEW_TUNING) {
+        ui.tuning.value = currentTuning().id;   // stays selected until the new one is saved
+        openTuningEditor(null);
+      } else {
+        selectTuning(ui.tuning.value);
       }
     });
+    ui.tuningEdit.addEventListener('click', () => openTuningEditor(currentTuning()));
+    ui.tuningStrings.addEventListener('input', previewTuning);
+    ui.tuningForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveTuning();
+    });
+    ui.tuningCancel.addEventListener('click', closeTuningEditor);
+    ui.tuningDelete.addEventListener('click', deleteTuning);
 
     ui.record.addEventListener('click', toggleRecord);
     ui.noiseCheck.addEventListener('click', startNoiseCheck);

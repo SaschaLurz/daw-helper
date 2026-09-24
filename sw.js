@@ -9,13 +9,14 @@
  */
 'use strict';
 
-const CACHE = 'daw-helper-v2';
+const CACHE = 'daw-helper-v3';
 const FILES = [
   './',
   'index.html',
   'style.css',
   'app.js',
   'pitch.js',
+  'tunings.js',
   'tempo.js',
   'metronome.js',
   'analysis.js',

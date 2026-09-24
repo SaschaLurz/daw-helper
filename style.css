@@ -165,7 +165,7 @@ select {
 select:hover, .stepper:hover, .ghost:hover, .segmented:hover { border-color: var(--dim); }
 select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper button:focus-visible,
 .seg:focus-visible, .tap:focus-visible, .nudge:focus-visible, .play:focus-visible,
-.record:focus-visible, .clip:focus-visible, .link:focus-visible, .take-play:focus-visible {
+.record:focus-visible, .clip:focus-visible, .link:focus-visible, .take-play:focus-visible, .primary:focus-visible {
   outline: 2px solid var(--muted);
   outline-offset: 2px;
 }
@@ -198,6 +198,8 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   background: color-mix(in srgb, var(--text) 9%, transparent);
   color: var(--text);
 }
+
+.field-row { display: flex; gap: 6px; }
 
 .stepper {
   display: inline-flex;
@@ -390,9 +392,18 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   --max: 64px;
   container-type: inline-size;
   display: flex;
+  align-items: flex-start;
   justify-content: center;
   gap: var(--gap);
   margin-top: 32px;
+}
+
+/* A course: the main string, with any partners (a 12-string's octave strings) smaller underneath. */
+.course {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;   /* room for the lock dot */
 }
 
 .string {
@@ -431,6 +442,10 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 .string .s-oct {
   font-size: calc(var(--size) * 0.19);
   margin-left: 2px;
+}
+
+.string.partner {
+  --size: calc(min(var(--max), calc((100cqw - (var(--n) - 1) * var(--gap)) / var(--n))) * 0.62);
 }
 
 .string.near { border-color: var(--dim); color: var(--text); }
@@ -1493,6 +1508,91 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   line-height: 1.5;
   color: var(--muted);
 }
+
+/* ---------- dialog ---------- */
+
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 22px 24px 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.dialog h2 { margin: 0; font-size: 18px; font-weight: 500; }
+
+.dlg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.dlg-field span {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dlg-field input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+
+.dlg-field input:focus-visible { border-color: var(--muted); }
+
+.dlg-help { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+.dlg-help code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.dlg-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+  margin-top: 14px;
+}
+
+.chip {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dlg-error { margin: 0; font-size: 13px; line-height: 1.5; color: var(--red); }
+
+.dlg-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.dlg-actions .danger { margin-right: auto; }
+.ghost.danger:hover { border-color: var(--red); color: var(--red); }
+.primary.small { padding: 9px 20px; font-size: 14px; }
 
 /* ---------- small screens ---------- */
 

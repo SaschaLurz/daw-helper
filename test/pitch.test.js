@@ -177,6 +177,21 @@ test('detuned low strings are tracked, including stiff-string overtones', () => 
   }
 });
 
+test('the range custom tunings may use, A0 to E6, is detected within half a cent', () => {
+  const a0 = Pitch.midiToFreq(21, 440);
+  const low = Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: BASS_SIZE, minFreq: 0.75 * a0 });
+  const r0 = low.detect(bassTone(a0));
+  assert.ok(Math.abs(centsBetween(r0.frequency, a0)) < 0.5, `A0 → ${r0.frequency.toFixed(3)} Hz`);
+
+  const high = Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: SIZE });
+  for (const midi of [84, 88]) {
+    const f = Pitch.midiToFreq(midi, 440);
+    const r = high.detect(tone(f, { harmonics: [1, 0.8, 0.6, 0.4] }));
+    const err = centsBetween(r.frequency, f);
+    assert.ok(Math.abs(err) < 0.5, `${f.toFixed(1)} Hz → ${r.frequency.toFixed(2)} Hz (${err.toFixed(2)} cents off)`);
+  }
+});
+
 test('a quiet, decaying low E is still picked up', () => {
   const det = bassDetector();
   const e1 = Pitch.midiToFreq(28, 440);

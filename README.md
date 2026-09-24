@@ -8,7 +8,7 @@ Today it does four things well:
 | Tuner | Tempo |
 | --- | --- |
 | ![Tuner showing a bass's low E in tune](docs/tuner.png) | ![Tempo mode at 120 BPM with the metronome running](docs/tempo.png) |
-| Chromatic tuner for guitar (6–8 strings), bass (4–6 strings), ukulele and mandolin, accurate to well under a cent, with reference tones | Tap tempo, a metronome with accents, subdivisions and count-in, and delay/LFO times |
+| Chromatic tuner for guitar, 12-string, bass, ukulele, banjo, mandolin, the violin family and your own tunings, accurate to well under a cent, with reference tones | Tap tempo, a metronome with accents, subdivisions and count-in, and delay/LFO times |
 | **Record** | **Analysis** |
 | ![Record mode with the level meter in the target zone and a take](docs/record.png) | ![Recording check of a vocal take](docs/analysis.png) |
 | A gain-staging meter, a room-noise check and a quick recorder that saves WAV files and hands takes to the analysis | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
@@ -48,10 +48,27 @@ D2 while you're aiming for E2) the hint says *Tune up ↑ to E2*.
 - **Channel** appears when the interface opens in stereo. Choose input 1 or 2
   if only one of them has the guitar plugged in, so noise on the other input
   can't interfere.
-- **Tuning** switches the string set. Guitar: Standard, Drop D, E♭ Standard,
-  D Standard, Drop C, DADGAD, Open G, 7-string (low B) and 8-string (low F♯).
-  Bass: standard EADG, Drop D, E♭, 5-string (low B) and 6-string (low B, high
-  C). Ukulele: standard GCEA (high G), low G and baritone (DGBE). Mandolin: GDAE.
+- **Tuning** picks the instrument and its tuning:
+  - Guitar: Standard, Drop D, E♭ Standard, D Standard, Drop C, DADGAD, Open G,
+    Open D, Open E, Open C, 7-string, 8-string, baritone
+  - 12-string: standard, and a whole step down
+  - Bass: EADG, Drop D, E♭, BEAD, 5-string, 6-string
+  - Ukulele: GCEA (high G), low G, D tuning, baritone, guitalele
+  - Banjo: 5-string in open G, double C and open D, tenor, Irish tenor, plectrum
+  - Mandolin family: mandolin, mandola, octave mandolin, mandocello
+  - Violin family: violin, viola, cello, double bass
+  - Other: dobro in open G, lap steel C6, Irish and Greek bouzouki
+- **Custom tunings** cover everything else. Pick **New custom tuning…** at the
+  bottom of the menu, name it, and type the strings as notes, lowest first:
+  `D2 A2 D3 F#3 A3 D4`. Sharps and flats go in as `F#3` or `Bb1` (a tuning
+  written with flats is also shown with flats), and strings that share a course
+  are joined with a slash: `E2/E3`. The editor starts from the current tuning
+  and checks every note as you type. Custom tunings are remembered in this
+  browser; the pencil next to the menu edits or deletes the selected one.
+- **Courses.** On a 12-string (or a Greek bouzouki) each course shows its
+  octave string as a smaller button under the main one, and the tuner knows
+  both. Tune them one string at a time: when both strings of a pair ring
+  together, the tuner hears the lower one.
 - **A4** sets the reference pitch (415–466 Hz).
 - **Click a string** to lock the tuner to it, which helps when a string is a
   long way off or you're fitting new strings. Click again or press Escape to
@@ -205,6 +222,7 @@ style.css             all styling (dark and light theme, single accent colour)
 app.js                audio setup, device handling, rendering, reference tone, tempo UI and
                       metronome sound, Record mode, file loading and the report
 pitch.js              pitch detection (McLeod Pitch Method) and note maths
+tunings.js            the instruments and their tunings, and the note notation custom tunings use
 tempo.js              tap-tempo estimation, note lengths, typed-tempo parsing
 metronome.js          the metronome's timing: beats, accents, subdivisions, count-in
 analysis.js           file-header sniffing, FFT/STFT and every measurement of the analysis
@@ -219,8 +237,8 @@ test/                 unit tests for the scripts above, plus a check that sw.js 
 docs/                 screenshots
 ```
 
-`pitch.js`, `tempo.js`, `metronome.js`, `analysis.js`, `report.js` and
-`recorder.js` are plain scripts that also work under `require()`, which is how
+`pitch.js`, `tunings.js`, `tempo.js`, `metronome.js`, `analysis.js`, `report.js`
+and `recorder.js` are plain scripts that also work under `require()`, which is how
 the tests load them. When the page starts loading a new file, add it to the
 `FILES` list in `sw.js` (the tests fail until you do).
 
@@ -234,7 +252,10 @@ The pitch tests run the detector against synthetic guitar tones (open strings,
 detuned strings, dominant second harmonics, noise, DC offset), the ukulele and
 mandolin range, and bass notes from low B to high C with a weak fundamental,
 stiff-string overtones, decay and noise, and check it stays within half a cent
-and that a low E never reads as E2. The tempo tests feed
+and that a low E never reads as E2 — across the whole range custom tunings may
+use, A0 to E6. The tunings tests check the note notation and its error
+messages, that every preset is valid and uniquely named, and that tunings which
+existed before keep their ids and notes. The tempo tests feed
 simulated tap sequences: steady beats, human jitter, mis-taps, pauses, tempo
 changes and bounced double events, and check the note lengths and typed-tempo
 parsing. The metronome tests check tick times, accents, subdivisions, count-in
@@ -261,7 +282,6 @@ roughly in the order they'd be useful:
 
 **Tuning and pitch**
 
-- **Custom tunings** — an editor for your own string sets.
 - **Intonation helper** — compare the open string with the 12th-fret reading
   per string and say which way to move the saddle.
 
