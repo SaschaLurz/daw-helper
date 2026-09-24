@@ -1,15 +1,54 @@
 :root {
+  color-scheme: dark;
   --bg: #0e1013;
   --bg-elev: #15181c;
   --line: #262b32;
   --dim: #3a414a;
   --muted: #7c8590;
   --text: #eceef1;
+  --text-strong: #fff;
   --green: #3ddc97;
   --green-glow: rgba(61, 220, 151, 0.55);
   --red: #f87171;
   --amber: #f5b74a;
+  --glow: rgba(255, 255, 255, 0.035);
   --font: "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+/* Light theme: follows the system unless a theme was picked (data-theme on <html>).
+   The accents are darker than in the dark theme so text in them stays readable. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f3f4f6;
+    --bg-elev: #fff;
+    --line: #dde1e6;
+    --dim: #b9c0c8;
+    --muted: #5f6873;
+    --text: #15181c;
+    --text-strong: #000;
+    --green: #087a4f;
+    --green-glow: rgba(8, 122, 79, 0.35);
+    --red: #c62828;
+    --amber: #a15c07;
+    --glow: rgba(255, 255, 255, 0.8);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f3f4f6;
+  --bg-elev: #fff;
+  --line: #dde1e6;
+  --dim: #b9c0c8;
+  --muted: #5f6873;
+  --text: #15181c;
+  --text-strong: #000;
+  --green: #087a4f;
+  --green-glow: rgba(8, 122, 79, 0.35);
+  --red: #c62828;
+  --amber: #a15c07;
+  --glow: rgba(255, 255, 255, 0.8);
 }
 
 * { box-sizing: border-box; }
@@ -21,7 +60,7 @@ html, body { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
-  background-image: radial-gradient(ellipse 70% 45% at 50% 0%, rgba(255, 255, 255, 0.035), transparent);
+  background-image: radial-gradient(ellipse 70% 45% at 50% 0%, var(--glow), transparent);
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
@@ -47,6 +86,8 @@ button, select { font: inherit; color: inherit; }
 .app:not(.mode-tempo) .tempo-only,
 .app:not(.mode-analysis) .analysis-only,
 .app:not(.running) .running-only,
+.app:not(.tone-on) .listen-only,
+.app.running .listen-only,
 .app:not(.has-report) .report-only { display: none !important; }
 
 .panel {
@@ -68,10 +109,15 @@ button, select { font: inherit; color: inherit; }
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 10px 14px;
+  gap: 10px 12px;
 }
 
-.spacer { flex: 1; }
+/* Buttons stay together on the right, also when the bar wraps. */
+.bar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
 
 .field {
   display: flex;
@@ -105,7 +151,7 @@ select {
 
 select:hover, .stepper:hover, .ghost:hover, .segmented:hover { border-color: var(--dim); }
 select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper button:focus-visible,
-.seg:focus-visible, .tap:focus-visible {
+.seg:focus-visible, .tap:focus-visible, .nudge:focus-visible, .play:focus-visible {
   outline: 2px solid var(--muted);
   outline-offset: 2px;
 }
@@ -135,7 +181,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 .seg:hover { color: var(--text); }
 
 .seg.active {
-  background: rgba(255, 255, 255, 0.09);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
   color: var(--text);
 }
 
@@ -180,6 +226,21 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 .ghost:hover { color: var(--text); }
+
+.toggle[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+
+.ghost.icon {
+  width: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.ghost.icon svg { width: 18px; height: 18px; }
+
+/* Theme button: half filled follows the system, empty is light, full is dark. */
+#theme[data-choice="light"] path { display: none; }
+#theme[data-choice="dark"] circle { fill: currentColor; }
 
 /* ---------- note readout ---------- */
 
@@ -228,6 +289,10 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 .idle .note-name { color: var(--dim); }
+
+/* Tone on but not listening: offer to start where the reading would be. */
+.tone-on:not(.running) #freq { display: none; }
+#listen { margin-top: 12px; }
 .in-tune .note-name { color: var(--green); }
 
 .freq {
@@ -353,8 +418,22 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 .string.in-tune {
   border-color: var(--green);
   color: var(--green);
-  background: rgba(61, 220, 151, 0.08);
-  box-shadow: 0 0 18px rgba(61, 220, 151, 0.18);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.string.sounding {
+  border-color: var(--green);
+  color: var(--text);
+  animation: sounding 1.6s ease-in-out infinite;
+}
+
+@keyframes sounding {
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--green) 20%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .string.sounding { animation: none; }
 }
 
 .string.locked::after {
@@ -399,7 +478,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 /* While the overlay is up, the tuner behind it is a faint ghost. */
-.mode-tuner:not(.running) #tuner-view {
+.mode-tuner:not(.running):not(.tone-on) #tuner-view {
   opacity: 0.16;
   filter: blur(6px);
   pointer-events: none;
@@ -442,7 +521,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   transition: background-color 120ms ease, transform 120ms ease;
 }
 
-.primary:hover { background: #fff; }
+.primary:hover { background: var(--text-strong); }
 .primary:active { transform: scale(0.98); }
 .primary:disabled { opacity: 0.6; cursor: default; }
 
@@ -462,13 +541,44 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   line-height: 1;
 }
 
+/* The number is an input: click it to type a tempo. */
 .bpm-value {
+  width: 3.2ch;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  font: inherit;
   font-weight: 200;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
+  text-align: center;
   color: var(--text);
-  transition: color 180ms ease;
+  caret-color: var(--green);
+  outline: none;
+  transition: color 180ms ease, background-color 120ms ease;
 }
+
+.bpm-value:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.bpm-value:focus { background: color-mix(in srgb, var(--text) 7%, transparent); }
+
+.nudge {
+  align-self: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: 0 20px;
+  padding: 0;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.nudge:hover { border-color: var(--dim); color: var(--text); }
 
 .bpm-unit {
   margin-left: 0.1em;
@@ -479,7 +589,6 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   color: var(--muted);
 }
 
-.tempo-idle .bpm-value { color: var(--dim); }
 .tempo-steady .bpm-value { color: var(--green); }
 
 .tap-area {
@@ -525,7 +634,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 
 .tap.hit {
   transform: scale(0.94);
-  background: rgba(236, 238, 241, 0.12);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .tempo-steady .tap {
@@ -533,10 +642,121 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   color: var(--green);
 }
 
-.tempo-steady .tap.hit { background: rgba(61, 220, 151, 0.14); }
+.tempo-steady .tap.hit { background: color-mix(in srgb, var(--green) 14%, transparent); }
 
 #tempo-view .hint { margin-top: 18px; }
 #tempo-view .display { padding-bottom: 0; }
+
+/* metronome */
+
+.click-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 4px;
+}
+
+.play {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 18px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.play:hover { border-color: var(--dim); }
+
+.play-icon {
+  width: 0;
+  height: 0;
+  border-left: 9px solid currentColor;
+  border-top: 5.5px solid transparent;
+  border-bottom: 5.5px solid transparent;
+}
+
+.clicking .play { border-color: var(--green); color: var(--green); }
+
+.clicking .play-icon {
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+.beat-dots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.dot-beat {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+.dot-beat.first { width: 11px; height: 11px; }
+.dot-beat.on { background: var(--text); }
+.dot-beat.first.on { background: var(--green); }
+
+/* delay and LFO table */
+
+.lengths {
+  margin-top: 30px;
+  padding: 16px 20px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-elev);
+}
+
+.lengths-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lengths h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.segmented.small { height: 28px; padding: 2px; }
+.segmented.small .seg { padding: 0 10px; font-size: 12px; }
+
+.lengths table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.lengths th,
+.lengths td {
+  padding: 7px 0 7px 12px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.lengths th:first-child { padding-left: 0; text-align: left; }
+.lengths thead th { font-size: 12px; color: var(--muted); }
+.lengths tbody th { color: var(--muted); }
+.lengths td { color: var(--text); }
+.lengths tbody tr > * { border-top: 1px solid var(--line); }
 
 /* ---------- analysis ---------- */
 
@@ -580,7 +800,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 
 .dragging .dropzone {
   border-color: var(--green);
-  background: rgba(61, 220, 151, 0.05);
+  background: color-mix(in srgb, var(--green) 5%, transparent);
 }
 
 .dragging .report { opacity: 0.4; }
@@ -733,7 +953,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 .item summary::-webkit-details-marker { display: none; }
-.item summary:hover { background: rgba(255, 255, 255, 0.025); }
+.item summary:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
 .item summary:focus-visible, .tile summary:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; border-radius: 12px; }
 
 .item-label { font-size: 14px; color: var(--text); }
@@ -941,6 +1161,9 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   .tick-label { font-size: 26px; }
   .tap-area { height: 180px; }
   .tap-ring, .tap { width: 130px; height: 130px; }
+  .bpm { font-size: min(24vw, 32vh); }
+  .nudge { width: 36px; height: 36px; margin: 0 6px; font-size: 18px; }
+  .lengths { padding: 14px 14px 8px; }
   .headline { grid-template-columns: 1fr; }
   .dropzone { padding: 32px 16px; }
   .dropzone h1 { font-size: 32px; }

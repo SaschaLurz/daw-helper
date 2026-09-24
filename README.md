@@ -7,8 +7,8 @@ Today it does three things well:
 
 | Tuner | Tempo | Analysis |
 | --- | --- | --- |
-| ![Guitar tuner showing E2 in tune](docs/tuner.png) | ![Tap tempo showing 120 BPM](docs/tempo.png) | ![Recording check of a vocal take](docs/analysis.png) |
-| Chromatic guitar tuner with string indicators, accurate to well under a cent | Tap-tempo counter that follows you as you tap | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
+| ![Guitar tuner showing E2 in tune](docs/tuner.png) | ![Tempo mode at 120 BPM with the metronome running](docs/tempo.png) | ![Recording check of a vocal take](docs/analysis.png) |
+| Chromatic tuner for guitar, ukulele and mandolin, accurate to well under a cent, with reference tones | Tap tempo, a metronome with accents, subdivisions and count-in, and delay/LFO times | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
 
 ## Getting started
 
@@ -25,6 +25,12 @@ npm start
 browser. (Browsers only allow audio-input access from a secure context; a
 local server on `localhost` counts as one, which is why there is one.)
 
+Once it has loaded, the app also works offline, and Chrome and Edge offer to
+install it (the install icon in the address bar), after which it opens in its
+own window like any other app. It follows your system's light or dark setting;
+the round button at the right of the top bar switches between following the
+system, light and dark.
+
 ## Tuner
 
 1. Click **Start listening** and allow microphone access.
@@ -39,12 +45,20 @@ D2 while you're aiming for E2) the hint says *Tune up ↑ to E2*.
 - **Channel** appears when the interface opens in stereo. Choose input 1 or 2
   if only one of them has the guitar plugged in, so noise on the other input
   can't interfere.
-- **Tuning** switches the string set: Standard, Drop D, E♭ Standard,
-  D Standard, Drop C, DADGAD, Open G.
+- **Tuning** switches the string set. Guitar: Standard, Drop D, E♭ Standard,
+  D Standard, Drop C, DADGAD, Open G. Ukulele: standard GCEA (high G),
+  low G and baritone (DGBE). Mandolin: GDAE.
 - **A4** sets the reference pitch (415–466 Hz).
 - **Click a string** to lock the tuner to it, which helps when a string is a
   long way off or you're fitting new strings. Click again or press Escape to
   go back to automatic.
+- **Reference tone** — the speaker button — makes the strings audible: click
+  one and its note plays until you click it again (or press Escape), at the
+  current A4. Use it to tune by ear, or just to check that sound comes out of
+  the right speakers. It works without starting the tuner; with the tuner
+  listening as well, the meter shows how close you are while you hear the
+  note. The tone is a soft sound with a few overtones, so even a low E is
+  audible on small speakers.
 - The thin bar at the very bottom is the input level, so you can see the
   signal arriving and set the gain on your interface sensibly.
 
@@ -65,6 +79,31 @@ tempo after you stop, so you can check it against the music.
 Pause for a couple of seconds (or press **Reset**) to start a fresh
 measurement. Stray taps well off the beat are ignored, and if you drift to a
 different tempo without pausing the reading follows within a few taps.
+
+You can also set the tempo directly: click the number and type one (20–300,
+decimals such as `98.5` or `98,5` are fine), use **−** and **+**, or the arrow
+keys while the number is selected (Shift for steps of 10). The tempo is
+remembered.
+
+**Start click** plays a metronome at that tempo, and the dots next to it show
+where you are in the bar. In the top bar:
+
+- **Beats** — beats per bar; the first one is accented. 1 means no accent.
+- **Subdivide** — quieter clicks between the beats: eighths, triplets or
+  sixteenths.
+- **Count-in** — one or two bars of plain beats before the pattern starts,
+  counted down under the number.
+
+Changes, including tapping a new tempo, take effect from the next beat without
+stopping the click. The clicks are scheduled on the audio clock a little ahead
+of time, so they stay steady while the page is busy, and they keep going in a
+background tab (for example while your DAW is in front). The click plays
+through your system's default output.
+
+**Delay & LFO** below lists the length of each note value at the current tempo
+— straight, dotted and triplet, from whole notes to 1/32 — in milliseconds for
+delay times, reverb pre-delay or compressor release, or in Hz for LFO rates.
+
 Tempo mode does not need microphone access.
 
 ## Analysis
@@ -116,21 +155,27 @@ the hum check, which needs about 3 Hz of resolution and averages a longer FFT.
 ## Project layout
 
 ```
-index.html          page structure
-style.css           all styling (dark, single accent colour)
-app.js              audio setup, device handling, rendering, tempo UI, file loading and the report
-pitch.js            pitch detection (McLeod Pitch Method) and note maths
-tempo.js            tap-tempo estimation
-analysis.js         file-header sniffing, FFT/STFT and every measurement of the analysis
-analysis-worker.js  runs analysis.js off the main thread
-report.js           statuses, target ranges, explanations and the summary of the analysis
-serve.js            dependency-free static server for local use
-test/               unit tests for pitch.js, tempo.js, analysis.js and report.js
-docs/               screenshots
+index.html            page structure
+style.css             all styling (dark and light theme, single accent colour)
+app.js                audio setup, device handling, rendering, reference tone, tempo UI and
+                      metronome sound, file loading and the report
+pitch.js              pitch detection (McLeod Pitch Method) and note maths
+tempo.js              tap-tempo estimation, note lengths, typed-tempo parsing
+metronome.js          the metronome's timing: beats, accents, subdivisions, count-in
+analysis.js           file-header sniffing, FFT/STFT and every measurement of the analysis
+analysis-worker.js    runs analysis.js off the main thread
+report.js             statuses, target ranges, explanations and the summary of the analysis
+sw.js                 service worker: offline support (network first, cache as fallback)
+manifest.webmanifest  install metadata; icons/ holds the app icons
+serve.js              dependency-free static server for local use
+test/                 unit tests for the scripts above, plus a check that sw.js caches every file
+docs/                 screenshots
 ```
 
-`pitch.js`, `tempo.js`, `analysis.js` and `report.js` are plain scripts that
-also work under `require()`, which is how the tests load them.
+`pitch.js`, `tempo.js`, `metronome.js`, `analysis.js` and `report.js` are plain
+scripts that also work under `require()`, which is how the tests load them.
+When the page starts loading a new file, add it to the `FILES` list in `sw.js`
+(the tests fail until you do).
 
 ## Tests
 
@@ -139,9 +184,12 @@ npm test
 ```
 
 The pitch tests run the detector against synthetic guitar tones (open strings,
-detuned strings, dominant second harmonics, noise, DC offset) and check it stays
-within half a cent. The tempo tests feed simulated tap sequences: steady beats,
-human jitter, mis-taps, pauses, tempo changes and bounced double events. The
+detuned strings, dominant second harmonics, noise, DC offset) and the ukulele
+and mandolin range, and check it stays within half a cent. The tempo tests feed
+simulated tap sequences: steady beats, human jitter, mis-taps, pauses, tempo
+changes and bounced double events, and check the note lengths and typed-tempo
+parsing. The metronome tests check tick times, accents, subdivisions, count-in
+and that changes mid-bar keep every beat on the grid. The
 analysis tests parse hand-built WAV, FLAC, MP3 and M4A headers, check the
 K-weighting filter against the coefficients in BS.1770 and a −20 dBFS sine
 against −23 LUFS, and run synthetic takes with known noise, clipping, gaps,
@@ -156,21 +204,14 @@ roughly in the order they'd be useful:
 
 **Tempo and timing**
 
-- **Metronome** — an audible click at the tapped (or typed) tempo, with accents,
-  subdivisions and a count-in. The tap tempo already knows the beat; it should
-  be able to play it.
-- **Delay and LFO calculator** — turn a BPM into milliseconds for 1/4, 1/8,
-  1/16, dotted and triplet notes, plus Hz for LFO sync. Handy for setting
-  delays, reverb pre-delay, compressor release and modulation rates.
 - **Tempo from audio** — detect the tempo of a loop or a recording via onset
   detection, instead of tapping.
 
 **Tuning and pitch**
 
-- **More instruments** — bass (4/5/6-string), 7- and 8-string guitar, ukulele,
-  mandolin, and a custom tuning editor.
-- **Reference tone** — play any note through the interface for tuning by ear
-  or checking that the monitors are wired correctly.
+- **More instruments** — bass (4/5/6-string), 7- and 8-string guitar, and a
+  custom tuning editor. Bass needs the detector's range taken down from 55 Hz
+  to about 28 Hz.
 - **Intonation helper** — compare the open string with the 12th-fret reading
   per string and say which way to move the saddle.
 
@@ -178,8 +219,9 @@ roughly in the order they'd be useful:
 
 - **Gain-staging meter** — peak and RMS with hold and a clip indicator, plus a
   target range so it's obvious when the interface gain is set well.
-- **Noise floor check** — measure the hum and hiss on an input and flag 50/60 Hz
-  mains hum.
+- **Live noise floor check** — Analysis already measures noise and hum in a
+  file; this would do the same on the live input, e.g. from ten seconds of
+  room silence.
 - **Round-trip latency test** — send a click out of the interface, capture it
   on the input, and report the latency in milliseconds and samples for setting
   the DAW's compensation.
@@ -190,15 +232,16 @@ roughly in the order they'd be useful:
 - **Test signal generator** — sine, pink and white noise, sweeps — for
   checking headphones, monitors and the room.
 - **Frequency cheat sheet** — instrument ranges, EQ trouble spots and a
-  note ↔ Hz ↔ MIDI converter.
+  note ↔ Hz ↔ MIDI converter that can play any note.
 - **Quick recorder** — capture a short idea from the interface and download it
   as a WAV file before it's forgotten.
 - **Session notes** — BPM, key, tuning and capo per song, saved locally.
 
 **The app itself**
 
-- Installable as a PWA that works offline.
-- A light theme.
+- **Output choice** — pick which output the metronome and reference tone play
+  through, rather than the system default (Chrome and Edge support this;
+  other browsers would keep the default).
 
 Ideas, bug reports and pull requests are welcome via
 [issues](https://github.com/SaschaLurz/daw-helper/issues).

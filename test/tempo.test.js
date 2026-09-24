@@ -86,3 +86,33 @@ test('reset clears everything', () => {
   assert.equal(state.bpm, 0);
   assert.equal(state.count, 0);
 });
+
+test('note lengths at 120 bpm match the usual delay chart', () => {
+  const rows = Object.fromEntries(Tempo.noteLengths(120).map((r) => [r.label, r]));
+  assert.deepEqual(Object.keys(rows), ['1/1', '1/2', '1/4', '1/8', '1/16', '1/32']);
+  assert.equal(rows['1/4'].straight, 500);
+  assert.equal(rows['1/4'].dotted, 750);
+  assert.ok(Math.abs(rows['1/4'].triplet - 333.333) < 0.001);
+  assert.equal(rows['1/1'].straight, 2000);
+  assert.equal(rows['1/8'].dotted, 375);
+  assert.equal(rows['1/16'].straight, 125);
+  assert.equal(1000 / rows['1/4'].straight, 2);   // LFO synced to quarters: 2 Hz
+});
+
+test('note lengths scale inversely with tempo', () => {
+  const slow = Tempo.noteLengths(60);
+  const fast = Tempo.noteLengths(180);
+  slow.forEach((row, i) => assert.ok(Math.abs(row.straight - 3 * fast[i].straight) < 1e-9));
+});
+
+test('typed tempos accept a decimal comma and stay in range', () => {
+  assert.equal(Tempo.parseBpm('120'), 120);
+  assert.equal(Tempo.parseBpm(' 98,5 '), 98.5);
+  assert.equal(Tempo.parseBpm('120.46'), 120.5);
+  assert.equal(Tempo.parseBpm('1000'), Tempo.MAX_BPM);
+  assert.equal(Tempo.parseBpm('5'), Tempo.MIN_BPM);
+  assert.ok(Number.isNaN(Tempo.parseBpm('')));
+  assert.ok(Number.isNaN(Tempo.parseBpm('fast')));
+  assert.ok(Number.isNaN(Tempo.parseBpm('-80')));
+  assert.equal(Tempo.clampBpm(119.96), 120);
+});

@@ -1,10 +1,13 @@
 /*
- * tempo.js — tap-tempo estimation.
+ * tempo.js — tap-tempo estimation and tempo maths.
  *
  * Keeps the most recent taps, throws away intervals that are clearly mis-taps
  * (far from the median), and averages the rest. A long pause starts a fresh
  * measurement, so the reading follows tempo changes instead of dragging the
  * old tempo along.
+ *
+ * Also turns a tempo into note lengths (delay times, LFO rates) and parses a
+ * typed tempo.
  *
  * Loaded as a plain <script> in the browser (window.Tempo) and via require()
  * in Node for the tests.
@@ -83,5 +86,44 @@
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
 
-  return { createTapTempo };
+  const MIN_BPM = 20;
+  const MAX_BPM = 300;
+
+  // Note values as multiples of a quarter note (one beat).
+  const NOTE_VALUES = [
+    { label: '1/1', beats: 4 },
+    { label: '1/2', beats: 2 },
+    { label: '1/4', beats: 1 },
+    { label: '1/8', beats: 0.5 },
+    { label: '1/16', beats: 0.25 },
+    { label: '1/32', beats: 0.125 },
+  ];
+
+  /** Keeps a tempo in range, to one decimal. */
+  function clampBpm(bpm) {
+    const rounded = Math.round(bpm * 10) / 10;
+    return rounded < MIN_BPM ? MIN_BPM : rounded > MAX_BPM ? MAX_BPM : rounded;
+  }
+
+  /** A typed tempo ("120", "98,5", " 90 ") as a number in range, or NaN. */
+  function parseBpm(text) {
+    const value = Number(String(text).trim().replace(',', '.'));
+    if (!Number.isFinite(value) || value <= 0) return NaN;
+    return clampBpm(value);
+  }
+
+  /**
+   * Length of each note value at a tempo in milliseconds — straight, dotted
+   * (half as long again) and triplet (two thirds). 1000 / ms is the matching
+   * LFO rate in Hz.
+   */
+  function noteLengths(bpm) {
+    const beatMs = 60000 / bpm;
+    return NOTE_VALUES.map((n) => {
+      const straight = n.beats * beatMs;
+      return { label: n.label, straight, dotted: straight * 1.5, triplet: (straight * 2) / 3 };
+    });
+  }
+
+  return { createTapTempo, clampBpm, parseBpm, noteLengths, MIN_BPM, MAX_BPM };
 });

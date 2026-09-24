@@ -46,6 +46,17 @@ test('open strings are detected within half a cent', () => {
   }
 });
 
+test('ukulele and mandolin strings are detected within half a cent', () => {
+  const det = Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: SIZE });
+  // G3 up to E5 (659 Hz), the mandolin's top string; brighter, faster-decaying overtones.
+  for (const midi of [55, 60, 62, 64, 67, 69, 76]) {
+    const f = Pitch.midiToFreq(midi, 440);
+    const r = det.detect(tone(f, { harmonics: [1, 0.35, 0.15, 0.06] }));
+    const err = centsBetween(r.frequency, f);
+    assert.ok(Math.abs(err) < 0.5, `${f.toFixed(2)} Hz → ${r.frequency.toFixed(3)} Hz (${err.toFixed(2)} cents off)`);
+  }
+});
+
 test('detuned strings are tracked accurately', () => {
   const det = Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: SIZE });
   for (const f of STRINGS) {
