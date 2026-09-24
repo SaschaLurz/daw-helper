@@ -2,7 +2,7 @@
   "name": "daw-helper",
   "version": "1.0.0",
   "private": true,
-  "description": "A small browser toolbox for home recording: tuner with reference tones, tap tempo and metronome, and a plain-words recording check, built for audio interfaces.",
+  "description": "A small browser toolbox for home recording: tuner for guitar and bass with reference tones, tap tempo and metronome, a recorder with a gain-staging meter, and a plain-words recording check, built for audio interfaces.",
   "scripts": {
     "start": "node serve.js",
     "test": "node --test"

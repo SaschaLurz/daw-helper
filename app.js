@@ -2,8 +2,9 @@
  * app.js — wires the audio input to the pitch detector and drives the UI.
  *
  * Signal path: audio interface → getUserMedia (all browser processing off)
- * → optional channel pick → high-pass 35 Hz → low-pass 2.2 kHz → AnalyserNode
- * → Pitch.detect() every ~20 ms → short median → display.
+ * → optional channel pick → high-pass (35 Hz, lower for bass) → low-pass 2.2 kHz
+ * → AnalyserNode → Pitch.detect() every ~20 ms → short median → display. The
+ * window and search range follow the lowest string of the tuning.
  *
  * With Tone switched on, clicking a string also plays its note (a periodic
  * wave with a few overtones) to tune by ear.
@@ -12,6 +13,11 @@
  * Tempo.createTapTempo(), or a tempo is typed. The metronome takes its ticks
  * from Metronome.createClock() and schedules them on the Web Audio clock a
  * little ahead of time, so the click stays steady whatever the page is doing.
+ *
+ * Record mode shares the tuner's input: the unfiltered signal also goes to
+ * recorder-worklet.js, which reports every block's peak and power for the
+ * meter and, while recording, the raw samples. Takes stay in memory; they can
+ * be played, saved as WAV (Recorder.encodeWav) or handed to the analysis.
  *
  * Analysis mode takes a dropped file: header sniffed for the native sample
  * rate → decodeAudioData in an offline context at that rate → channels handed
@@ -30,6 +36,13 @@
     { id: 'drop-c', group: 'Guitar', name: 'Drop C', notes: [36, 43, 48, 53, 57, 62] },
     { id: 'dadgad', group: 'Guitar', name: 'DADGAD', notes: [38, 45, 50, 55, 57, 62] },
     { id: 'open-g', group: 'Guitar', name: 'Open G', notes: [38, 43, 50, 55, 59, 62] },
+    { id: 'seven', group: 'Guitar', name: '7-string', notes: [35, 40, 45, 50, 55, 59, 64] },
+    { id: 'eight', group: 'Guitar', name: '8-string', notes: [30, 35, 40, 45, 50, 55, 59, 64] },
+    { id: 'bass', group: 'Bass', name: 'Bass', notes: [28, 33, 38, 43] },
+    { id: 'bass-drop-d', group: 'Bass', name: 'Bass Drop D', notes: [26, 33, 38, 43] },
+    { id: 'bass-eb', group: 'Bass', name: 'Bass E♭', notes: [27, 32, 37, 42] },
+    { id: 'bass-5', group: 'Bass', name: 'Bass 5-string', notes: [23, 28, 33, 38, 43] },
+    { id: 'bass-6', group: 'Bass', name: 'Bass 6-string', notes: [23, 28, 33, 38, 43, 48] },
     { id: 'ukulele', group: 'Ukulele', name: 'Ukulele', notes: [67, 60, 64, 69] },
     { id: 'ukulele-low-g', group: 'Ukulele', name: 'Low G uke', notes: [55, 60, 64, 69] },
     { id: 'ukulele-baritone', group: 'Ukulele', name: 'Baritone uke', notes: [50, 55, 59, 64] },
@@ -44,7 +57,14 @@
   const MAX_FILE_BYTES = 300 * 1024 * 1024;  // decodeAudioData holds the whole file in memory
   const PLAY_LEAD_S = 0.5;        // an excerpt starts this long before its timestamp…
   const PLAY_LENGTH_S = 3;        // …and lasts this long
-  const MODES = ['tuner', 'tempo', 'analysis'];
+  const MODES = ['tuner', 'tempo', 'record', 'analysis'];
+  const INPUT_MODES = ['tuner', 'record'];   // the modes that listen to the interface
+  const MAX_TAKE_S = 600;
+  const MIN_TAKE_S = 0.2;
+  const NOISE_CHECK_S = 5;
+  const NOISE_SKIP_S = 0.5;   // the click that started the check, and anything still on its way in
+  const METER_FLOOR_DB = -60;
+  const METER_TICKS = [-60, -48, -36, -24, -18, -12, -6, 0];
   const THEMES = ['auto', 'light', 'dark'];
   const STORAGE_KEY = 'tuner.settings';
 
@@ -112,6 +132,19 @@
     beatDots: $('beat-dots'),
     lengths: $('lengths'),
     units: Array.from(document.querySelectorAll('.seg[data-unit]')),
+    recDisplay: document.querySelector('.rec-display'),
+    recPeak: $('rec-peak'),
+    recStatus: $('rec-status'),
+    meterRows: $('meter-rows'),
+    meterScale: $('meter-scale'),
+    peakReset: $('peak-reset'),
+    record: $('record'),
+    recordLabel: $('record-label'),
+    recTime: $('rec-time'),
+    noiseCheck: $('noise-check'),
+    noiseResult: $('noise-result'),
+    takes: $('takes'),
+    takeList: $('take-list'),
     dropzone: $('dropzone'),
     browse: $('browse'),
     file: $('file'),
@@ -128,13 +161,21 @@
   };
 
   const settings = loadSettings();
-  const audio = { ctx: null, stream: null, nodes: [], analyser: null, buffer: null, detector: null, channels: 1 };
+  const audio = {
+    ctx: null, stream: null, nodes: [], analyser: null, buffer: null, detector: null, channels: 1,
+    capture: null, captureReady: false, workletLoad: null,
+  };
   const tapTempo = Tempo.createTapTempo();
   const tone = { on: false, osc: null, gain: null, string: -1, wave: null };
   // queue: scheduled beats not yet heard; beat: the one heard last.
   const metro = { clock: Metronome.createClock(clickOptions()), timer: 0, out: null, queue: [], beat: null, countIn: 0 };
   const analysis = { worker: null, buffer: null, file: null, token: 0 };
   const player = { source: null, button: null };
+  // capturing: 'take' or 'noise' while samples are being collected.
+  const rec = {
+    meter: Recorder.createMeter(), capturing: null, stopping: false, chunks: [], frames: 0, startedAt: 0,
+    takes: [], nextTake: 1, rows: [], noiseTimer: 0, noisePeakDb: -Infinity,
+  };
 
   let running = false;
   let lockedString = -1;          // index into the current tuning, or -1 for automatic
@@ -201,6 +242,7 @@
       }
       audioContext();
       if (audio.ctx.state === 'suspended') await audio.ctx.resume();
+      audio.captureReady = await loadCaptureWorklet();
       await openStream(settings.deviceId);
       await refreshDevices();
       running = true;
@@ -228,10 +270,21 @@
     syncOverlay();
   }
 
-  // The start overlay only belongs to the tuner, and only while it is not
-  // listening. With Tone on the strings are usable without listening.
+  // The start overlay belongs to the modes that listen, while they are not
+  // listening. With Tone on the tuner's strings are usable without listening.
   function syncOverlay() {
-    ui.overlay.hidden = running || settings.mode !== 'tuner' || tone.on;
+    ui.overlay.hidden = running || !INPUT_MODES.includes(settings.mode) || (settings.mode === 'tuner' && tone.on);
+  }
+
+  // Record mode's capture runs in an AudioWorklet, loaded once per context.
+  // Without it (an old browser) the tuner still works; recording does not.
+  function loadCaptureWorklet() {
+    if (!audio.workletLoad) {
+      audio.workletLoad = audio.ctx.audioWorklet
+        ? audio.ctx.audioWorklet.addModule('recorder-worklet.js').then(() => true, () => false)
+        : Promise.resolve(false);
+    }
+    return audio.workletLoad;
   }
 
   async function openStream(deviceId) {
@@ -272,11 +325,15 @@
   }
 
   function teardownGraph() {
+    if (rec.capturing) finishCapture();   // keep what was captured so far
     audio.nodes.forEach((n) => {
       try { n.disconnect(); } catch { /* already disconnected */ }
     });
     audio.nodes = [];
     audio.analyser = null;
+    if (audio.capture) audio.capture.port.onmessage = null;
+    audio.capture = null;
+    renderRecordState();
   }
 
   function buildGraph() {
@@ -296,9 +353,11 @@
       tap = pick;
     }
 
+    const range = detectorRange(ctx.sampleRate);
+
     const highpass = ctx.createBiquadFilter();
     highpass.type = 'highpass';
-    highpass.frequency.value = 35;
+    highpass.frequency.value = range.highpass;
     highpass.Q.value = 0.7;
 
     const lowpass = ctx.createBiquadFilter();
@@ -307,7 +366,7 @@
     lowpass.Q.value = 0.7;
 
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = ctx.sampleRate > 60000 ? 8192 : 4096;
+    analyser.fftSize = range.window;
     analyser.smoothingTimeConstant = 0;
 
     // A muted sink keeps the graph "live" in every browser without making sound.
@@ -321,15 +380,43 @@
     sink.connect(ctx.destination);
     nodes.push(highpass, lowpass, analyser, sink);
 
+    // Record mode gets the unfiltered input, in as many channels as it has.
+    if (audio.captureReady) {
+      const capture = new AudioWorkletNode(ctx, 'capture', {
+        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCountMode: 'max', channelInterpretation: 'discrete',
+      });
+      capture.port.onmessage = (e) => onCaptureMessage(e.data);
+      tap.connect(capture);
+      capture.connect(sink);
+      nodes.push(capture);
+      audio.capture = capture;
+    }
+    renderRecordState();
+
     audio.nodes = nodes;
     audio.analyser = analyser;
     audio.buffer = new Float32Array(analyser.fftSize);
     audio.detector = Pitch.createDetector({
       sampleRate: ctx.sampleRate,
       bufferSize: analyser.fftSize,
-      minFreq: 55,
+      minFreq: range.minFreq,
       maxFreq: 1400,
     });
+  }
+
+  // What the detector needs for the current tuning. Low strings (bass, 8-string)
+  // get a lower search range, a gentler high-pass, and a longer window: at
+  // least four cycles of the lowest string, never less than ≈ 85 ms.
+  function detectorRange(sampleRate) {
+    const lowest = Pitch.midiToFreq(Math.min.apply(null, currentTuning().notes), settings.a4);
+    const seconds = Math.max(0.085, 4 / lowest);
+    let window = 2048;
+    while (window < seconds * sampleRate && window < 32768) window *= 2;
+    return {
+      minFreq: Math.min(55, 0.75 * lowest),
+      highpass: Math.min(35, 0.6 * lowest),
+      window,
+    };
   }
 
   const isAlias = (d) => d.deviceId === 'default' || d.deviceId === 'communications';
@@ -415,6 +502,8 @@
     } else if (settings.mode === 'tempo') {
       renderBeat();
       renderRing(now);
+    } else if (settings.mode === 'record' && running) {
+      renderRecord(now);
     }
     requestAnimationFrame(frame);
   }
@@ -801,6 +890,7 @@
     if (settings.mode !== 'analysis') stopPlayback();
     if (settings.mode !== 'tempo') stopClick();
     if (settings.mode !== 'tuner') stopTone();
+    if (settings.mode !== 'record' && rec.capturing) stopCapture();
     ui.segs.forEach((b) => {
       const active = b.dataset.mode === settings.mode;
       b.classList.toggle('active', active);
@@ -1000,6 +1090,7 @@
     facts.push(`${(r.sampleRate / 1000).toFixed(r.sampleRate % 1000 ? 1 : 0)} kHz`);
     if (info.bitDepth) facts.push(`${info.bitDepth}-bit${info.encoding === 'float' ? ' float' : ''}`);
     else if (info.format === 'mp3' || info.format === 'm4a') facts.push('lossy');
+    else if (info.format === 'recording') facts.push('recorded in Record mode');
     const ch = buffer.numberOfChannels;
     facts.push(ch === 1 ? 'mono' : ch === 2 ? 'stereo' : `${ch} channels`);
 
@@ -1135,6 +1226,272 @@
       + `<text class="axis-label" x="${W}" y="${H - 2}" text-anchor="end">${fmtDuration(total)}</text></svg>`;
   }
 
+  // ------------------------------------------------------------------ record
+
+  const fmtDbfs = (db) => (Number.isFinite(db) ? `${db < 0 ? '−' : ''}${Math.abs(db).toFixed(1)}` : '−∞');
+  const meterPct = (db) => clamp((db - METER_FLOOR_DB) / -METER_FLOOR_DB, 0, 1);
+  const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+
+  // Which part of the scale a level is in; colours the bar.
+  function meterZone(db) {
+    const t = Recorder.TARGET;
+    if (db > t.ceiling) return 'over';
+    if (db > t.high) return 'hot';
+    if (db >= t.low) return 'good';
+    return 'low';
+  }
+
+  function onCaptureMessage(msg) {
+    if (msg.type === 'meter') {
+      rec.meter.update(msg, performance.now() / 1000);
+    } else if (msg.type === 'chunk' && rec.capturing) {
+      rec.chunks.push(msg.channels);
+      rec.frames += msg.channels[0].length;
+      if (rec.capturing === 'take' && rec.frames >= MAX_TAKE_S * audio.ctx.sampleRate) stopCapture();
+    } else if (msg.type === 'stopped' && rec.capturing) {
+      finishCapture();
+    }
+  }
+
+  function startCapture(purpose) {
+    if (!audio.capture || rec.capturing) return;
+    stopPlayback();
+    Object.assign(rec, { capturing: purpose, stopping: false, chunks: [], frames: 0, startedAt: performance.now() });
+    audio.capture.port.postMessage({ type: 'record', on: true });
+    renderRecordState();
+  }
+
+  // The worklet sends what it still holds, then 'stopped', which finishes the capture.
+  function stopCapture() {
+    if (!rec.capturing || rec.stopping) return;
+    rec.stopping = true;
+    clearTimeout(rec.noiseTimer);
+    if (audio.capture) audio.capture.port.postMessage({ type: 'record', on: false });
+    else finishCapture();
+    renderRecordState();
+  }
+
+  function finishCapture() {
+    const purpose = rec.capturing;
+    const channels = joinChunks(rec.chunks);
+    const sampleRate = audio.ctx.sampleRate;
+    Object.assign(rec, { capturing: null, stopping: false, chunks: [], frames: 0 });
+    clearTimeout(rec.noiseTimer);
+    if (purpose === 'take') addTake(channels, sampleRate);
+    else if (purpose === 'noise') showNoiseResult(channels, sampleRate);
+    renderRecordState();
+  }
+
+  function joinChunks(chunks) {
+    if (!chunks.length) return [];
+    const count = Math.min.apply(null, chunks.map((c) => c.length));
+    const total = chunks.reduce((n, c) => n + c[0].length, 0);
+    return Array.from({ length: count }, (_, ch) => {
+      const out = new Float32Array(total);
+      let pos = 0;
+      chunks.forEach((c) => {
+        out.set(c[ch], pos);
+        pos += c[ch].length;
+      });
+      return out;
+    });
+  }
+
+  function renderRecordState() {
+    const recording = rec.capturing === 'take';
+    ui.app.classList.toggle('recording', recording);
+    ui.record.setAttribute('aria-pressed', String(recording));
+    ui.recordLabel.textContent = recording ? 'Stop' : 'Record';
+    ui.record.disabled = !audio.capture || rec.capturing === 'noise' || rec.stopping;
+    ui.noiseCheck.disabled = !audio.capture || !!rec.capturing;
+    if (!recording) ui.recTime.textContent = '0:00';
+  }
+
+  function buildMeterRows(count) {
+    const labels = count === 2 ? ['L', 'R'] : count === 1 ? [''] : Array.from({ length: count }, (_, i) => String(i + 1));
+    const t = Recorder.TARGET;
+    const zone = `left:${(meterPct(t.low) * 100).toFixed(2)}%;width:${((meterPct(t.high) - meterPct(t.low)) * 100).toFixed(2)}%`;
+    ui.meterRows.innerHTML = labels.map((label) => '<div class="meter-row" data-zone="low">'
+      + `<span class="meter-label">${label}</span>`
+      + `<div class="meter-track"><div class="meter-zone" style="${zone}"></div><div class="meter-bar meter-peak"></div>`
+      + '<div class="meter-bar meter-rms"></div><div class="meter-hold"></div></div>'
+      + '<span class="meter-value">—</span>'
+      + '<button type="button" class="clip" title="Shows when a sample reached full scale · click to reset">Clip</button></div>').join('');
+    rec.rows = Array.from(ui.meterRows.children, (el) => ({
+      el,
+      peak: el.querySelector('.meter-peak'),
+      rms: el.querySelector('.meter-rms'),
+      hold: el.querySelector('.meter-hold'),
+      value: el.querySelector('.meter-value'),
+      clip: el.querySelector('.clip'),
+    }));
+  }
+
+  function buildMeterScale() {
+    ui.meterScale.innerHTML = '<span></span><div class="meter-ticks">'
+      + METER_TICKS.map((db) => `<span style="left:${(meterPct(db) * 100).toFixed(2)}%">${db < 0 ? '−' : ''}${Math.abs(db)}</span>`).join('')
+      + '</div><span></span><span></span>';
+  }
+
+  function renderRecord(now) {
+    const m = rec.meter.read(now / 1000);
+    if (m.channels.length && m.channels.length !== rec.rows.length) buildMeterRows(m.channels.length);
+    m.channels.forEach((c, i) => {
+      const row = rec.rows[i];
+      row.peak.style.transform = `scaleX(${meterPct(c.peakDb).toFixed(4)})`;
+      row.rms.style.transform = `scaleX(${meterPct(c.rmsDb).toFixed(4)})`;
+      const holding = c.holdDb > METER_FLOOR_DB;
+      row.hold.style.opacity = holding ? '1' : '0';
+      row.hold.style.left = `${(meterPct(c.holdDb) * 100).toFixed(2)}%`;
+      const zone = meterZone(c.peakDb);
+      if (row.el.dataset.zone !== zone) row.el.dataset.zone = zone;
+      setText(row.value, holding ? fmtDbfs(c.holdDb) : '—');
+      row.clip.classList.toggle('on', c.clipped);
+    });
+
+    const status = audio.capture
+      ? Recorder.levelStatus(m.maxDb, m.clipped)
+      : { status: 'bad', text: 'This browser can’t capture audio here, so the meter and recording are unavailable' };
+    setText(ui.recPeak, m.maxDb > METER_FLOOR_DB ? fmtDbfs(m.maxDb) : '—');
+    setText(ui.recStatus, status.text);
+    if (ui.recDisplay.dataset.status !== status.status) ui.recDisplay.dataset.status = status.status;
+    if (rec.capturing === 'take') setText(ui.recTime, fmtDuration(Math.floor((now - rec.startedAt) / 1000)));
+  }
+
+  function toggleRecord() {
+    if (rec.capturing === 'take') stopCapture();
+    else startCapture('take');
+    ui.record.blur();
+  }
+
+  // ---- takes
+
+  function addTake(channels, sampleRate) {
+    const frames = channels.length ? channels[0].length : 0;
+    if (frames < MIN_TAKE_S * sampleRate) return;
+    let peak = 0;
+    channels.forEach((c) => {
+      for (let i = 0; i < c.length; i++) {
+        const a = Math.abs(c[i]);
+        if (a > peak) peak = a;
+      }
+    });
+    const id = rec.nextTake++;
+    rec.takes.unshift({
+      id, name: `Take ${id}`, channels, sampleRate, duration: frames / sampleRate,
+      peakDb: Recorder.dbfs(peak), recordedAt: new Date(), buffer: null,
+    });
+    renderTakes();
+  }
+
+  function renderTakes() {
+    ui.takes.hidden = !rec.takes.length;
+    ui.takeList.innerHTML = rec.takes.map((t) => `<li class="take" data-id="${t.id}">`
+      + `<button type="button" class="take-play" data-action="play" aria-label="Play ${t.name}"><span class="play-icon" aria-hidden="true"></span></button>`
+      + `<span class="take-info"><span class="take-name">${t.name}</span>`
+      + `<span class="take-meta">${fmtDuration(t.duration)} · ${t.channels.length === 1 ? 'mono' : 'stereo'} · peak ${fmtDbfs(t.peakDb)} dBFS</span></span>`
+      + '<span class="take-actions">'
+      + `<button type="button" class="ghost small" data-action="check" title="Run the recording check on this take">Check</button>`
+      + `<button type="button" class="ghost small" data-action="download" title="Save as a 24-bit WAV file">WAV</button>`
+      + `<button type="button" class="ghost small" data-action="delete" aria-label="Delete ${t.name}">Delete</button>`
+      + '</span></li>').join('');
+  }
+
+  function takeBuffer(take) {
+    if (!take.buffer) {
+      const buffer = audioContext().createBuffer(take.channels.length, take.channels[0].length, take.sampleRate);
+      take.channels.forEach((c, i) => buffer.copyToChannel(c, i));
+      take.buffer = buffer;
+    }
+    return take.buffer;
+  }
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  function downloadTake(take) {
+    const d = take.recordedAt;
+    const wav = Recorder.encodeWav(take.channels, take.sampleRate, 24);
+    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${take.name} ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}-${pad2(d.getMinutes())}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  // Hands the take to Analysis mode, as if it had been dropped there.
+  function checkTake(take) {
+    stopPlayback();
+    setMode('analysis');
+    resetAnalysis();
+    const token = analysis.token;
+    const buffer = takeBuffer(take);
+    analysis.buffer = buffer;
+    analysis.file = {
+      name: `${take.name}.wav`,
+      info: { format: 'recording' },
+      decodedAt: take.sampleRate,
+      resampled: false,
+      truncated: buffer.duration > Analysis.MAX_SECONDS,
+    };
+    showAnalysisStage('progress');
+    setProgress(0, 'Analysing…');
+    runWorker(buffer, token);
+  }
+
+  function deleteTake(take) {
+    const row = ui.takeList.querySelector(`.take[data-id="${take.id}"]`);
+    if (player.button && row && row.contains(player.button)) stopPlayback();
+    rec.takes = rec.takes.filter((t) => t !== take);
+    renderTakes();
+  }
+
+  // ---- room noise
+
+  function startNoiseCheck() {
+    if (rec.capturing || !audio.capture) return;
+    // The loudest peak so far, for the signal-to-noise estimate: taken now, before the silence.
+    rec.noisePeakDb = rec.meter.read(performance.now() / 1000).maxDb;
+    startCapture('noise');
+    const end = performance.now() + NOISE_CHECK_S * 1000;
+    ui.noiseResult.hidden = false;
+    ui.noiseResult.className = 'noise-result measuring';
+    const tick = () => {
+      if (rec.capturing !== 'noise') return;
+      const left = Math.ceil((end - performance.now()) / 1000);
+      if (left <= 0) {
+        stopCapture();
+        return;
+      }
+      ui.noiseResult.innerHTML = `<p class="noise-count">Stay quiet… ${left}</p>`
+        + '<p class="noise-hint">Don’t play or touch anything. This measures the room, the cables and the interface at the current gain.</p>';
+      rec.noiseTimer = setTimeout(tick, 200);
+    };
+    tick();
+    ui.noiseCheck.blur();
+  }
+
+  function showNoiseResult(channels, sampleRate) {
+    const skip = Math.round(NOISE_SKIP_S * sampleRate);
+    if (!channels.length || channels[0].length < skip + sampleRate) {
+      ui.noiseResult.hidden = true;   // cut short: nothing to say
+      return;
+    }
+    const quiet = channels.map((c) => c.subarray(skip));
+    const v = Recorder.noiseVerdict(Analysis.analyse(quiet, sampleRate, {}), rec.noisePeakDb);
+    ui.noiseResult.className = `noise-result status-${v.status}`;
+    ui.noiseResult.innerHTML = '<header><span class="dot"></span>'
+      + `<h2>${esc(v.title)}</h2><button type="button" class="link" data-action="close">Close</button></header>`
+      + `<p class="noise-text">${esc(v.text)}</p>`
+      + (v.lines.length
+        ? `<ul>${v.lines.map((l) => `<li class="status-${l.status}"><span class="dot"></span><span class="nr-label">${esc(l.label)}</span>`
+          + `<span class="nr-value">${esc(l.value)}</span>${l.text ? `<span class="nr-text">${esc(l.text)}</span>` : ''}</li>`).join('')}</ul>`
+        : '')
+      + (v.warnings || []).map((w) => `<p class="nr-warning">${esc(w)}</p>`).join('');
+  }
+
   // ------------------------------------------------------------------ player
 
   function stopPlayback() {
@@ -1149,24 +1506,33 @@
     }
   }
 
-  // Play a short excerpt starting just before a timestamp; clicking the same
-  // stamp again stops it.
-  function playAt(t, button) {
+  // Plays (part of) a buffer and marks the button; clicking the same button
+  // again stops it.
+  function playBuffer(buffer, button, offset, duration) {
     const again = player.button === button;
     stopPlayback();
-    if (again || !analysis.buffer) return;
+    if (again || !buffer) return;
     const ctx = audioContext();
     if (ctx.state === 'suspended') ctx.resume();
     const source = ctx.createBufferSource();
-    source.buffer = analysis.buffer;
+    source.buffer = buffer;
     source.connect(ctx.destination);
-    const start = Math.max(0, t - PLAY_LEAD_S);
-    const duration = Math.min(PLAY_LENGTH_S, analysis.buffer.duration - start);
     source.onended = () => { if (player.source === source) stopPlayback(); };
-    source.start(0, start, duration);
+    source.start(0, offset, duration);
     player.source = source;
     player.button = button;
     button.classList.add('playing');
+  }
+
+  // A short excerpt starting just before a timestamp of the report.
+  function playAt(t, button) {
+    const buffer = analysis.buffer;
+    const start = Math.max(0, t - PLAY_LEAD_S);
+    playBuffer(buffer, button, start, buffer ? Math.min(PLAY_LENGTH_S, buffer.duration - start) : 0);
+  }
+
+  function playTake(take, button) {
+    playBuffer(takeBuffer(take), button, 0, take.duration);
   }
 
   // ------------------------------------------------------------------- setup
@@ -1220,6 +1586,7 @@
   function buildStrings() {
     const tuning = currentTuning();
     ui.strings.innerHTML = '';
+    ui.strings.style.setProperty('--n', tuning.notes.length);
     stringEls = tuning.notes.map((midi, i) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1284,6 +1651,9 @@
     buildMeter();
     buildStrings();
     buildBeatDots();
+    buildMeterScale();
+    buildMeterRows(1);
+    renderRecordState();
     applyView(null);
     renderTempo();
     renderClickState();
@@ -1439,6 +1809,30 @@
       lockedString = -1;
       stopTone();
       buildStrings();
+      if (running && audio.stream) {
+        resetReadings();
+        buildGraph();   // the detection range follows the tuning
+      }
+    });
+
+    ui.record.addEventListener('click', toggleRecord);
+    ui.noiseCheck.addEventListener('click', startNoiseCheck);
+    ui.peakReset.addEventListener('click', () => rec.meter.reset());
+    ui.meterRows.addEventListener('click', (e) => {
+      if (e.target.closest('.clip')) rec.meter.reset();
+    });
+    ui.noiseResult.addEventListener('click', (e) => {
+      if (e.target.closest('[data-action="close"]')) ui.noiseResult.hidden = true;
+    });
+    ui.takeList.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-action]');
+      const take = button && rec.takes.find((t) => t.id === Number(button.closest('.take').dataset.id));
+      if (!take) return;
+      const action = button.dataset.action;
+      if (action === 'play') playTake(take, button);
+      else if (action === 'download') downloadTake(take);
+      else if (action === 'check') checkTake(take);
+      else if (action === 'delete') deleteTake(take);
     });
 
     ui.a4Down.addEventListener('click', () => setA4(settings.a4 - 1));

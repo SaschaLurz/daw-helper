@@ -9,7 +9,7 @@
  */
 'use strict';
 
-const CACHE = 'daw-helper-v1';
+const CACHE = 'daw-helper-v2';
 const FILES = [
   './',
   'index.html',
@@ -21,6 +21,8 @@ const FILES = [
   'analysis.js',
   'analysis-worker.js',
   'report.js',
+  'recorder.js',
+  'recorder-worklet.js',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-192.png',

@@ -22,80 +22,85 @@
 <body>
   <main class="app idle mode-tuner" id="app">
     <header class="bar">
-      <div class="segmented" role="tablist" aria-label="Mode">
-        <button type="button" class="seg active" role="tab" aria-selected="true" data-mode="tuner">Tuner</button>
-        <button type="button" class="seg" role="tab" aria-selected="false" data-mode="tempo">Tempo</button>
-        <button type="button" class="seg" role="tab" aria-selected="false" data-mode="analysis">Analysis</button>
-      </div>
-      <div class="field tuner-only">
-        <label for="device">Input</label>
-        <select id="device" title="Audio input device"></select>
-      </div>
-      <div class="field tuner-only" id="channel-field" hidden>
-        <label for="channel">Channel</label>
-        <select id="channel" title="Which input channel of the interface to listen to">
-          <option value="mix">1 + 2</option>
-          <option value="0">1</option>
-          <option value="1">2</option>
-        </select>
-      </div>
-      <div class="field tuner-only">
-        <label for="tuning">Tuning</label>
-        <select id="tuning"></select>
-      </div>
-      <div class="field tuner-only">
-        <label id="a4-label">A4</label>
-        <div class="stepper" role="group" aria-labelledby="a4-label">
-          <button type="button" id="a4-down" aria-label="Lower reference pitch">−</button>
-          <span id="a4">440</span>
-          <button type="button" id="a4-up" aria-label="Raise reference pitch">+</button>
+      <div class="bar-top">
+        <div class="segmented" role="tablist" aria-label="Mode">
+          <button type="button" class="seg active" role="tab" aria-selected="true" data-mode="tuner">Tuner</button>
+          <button type="button" class="seg" role="tab" aria-selected="false" data-mode="tempo">Tempo</button>
+          <button type="button" class="seg" role="tab" aria-selected="false" data-mode="record">Record</button>
+          <button type="button" class="seg" role="tab" aria-selected="false" data-mode="analysis">Analysis</button>
+        </div>
+        <div class="bar-actions">
+          <button type="button" class="ghost icon toggle tuner-only" id="tone" aria-pressed="false" aria-label="Reference tone" title="Reference tone: click a string to hear it">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M3 7.5h3l4-3.5v12l-4-3.5H3z" fill="currentColor"/>
+              <path d="M13 7.3a3.8 3.8 0 0 1 0 5.4M15.3 5a7 7 0 0 1 0 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <button type="button" class="ghost input-only running-only" id="stop" title="Stop listening to the input">Stop</button>
+          <button type="button" class="ghost tempo-only" id="tempo-reset">Reset</button>
+          <button type="button" class="ghost analysis-only report-only" id="analysis-new">New file</button>
+          <button type="button" class="ghost icon" id="theme" aria-label="Theme">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/>
+            </svg>
+          </button>
         </div>
       </div>
-      <div class="field tempo-only">
-        <label for="beats">Beats</label>
-        <select id="beats" title="Beats per bar; the first one is accented">
-          <option value="1">1 · no accent</option>
-          <option value="2">2</option>
-          <option value="3">3</option>
-          <option value="4">4</option>
-          <option value="5">5</option>
-          <option value="6">6</option>
-          <option value="7">7</option>
-        </select>
-      </div>
-      <div class="field tempo-only">
-        <label for="subdivision">Subdivide</label>
-        <select id="subdivision" title="Quieter clicks between the beats">
-          <option value="1">Off</option>
-          <option value="2">Eighths</option>
-          <option value="3">Triplets</option>
-          <option value="4">Sixteenths</option>
-        </select>
-      </div>
-      <div class="field tempo-only">
-        <label for="count-in">Count-in</label>
-        <select id="count-in" title="Bars of plain beats before the pattern starts">
-          <option value="0">Off</option>
-          <option value="1">1 bar</option>
-          <option value="2">2 bars</option>
-        </select>
-      </div>
-      <div class="bar-actions">
-        <button type="button" class="ghost icon toggle tuner-only" id="tone" aria-pressed="false" aria-label="Reference tone" title="Reference tone: click a string to hear it">
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M3 7.5h3l4-3.5v12l-4-3.5H3z" fill="currentColor"/>
-            <path d="M13 7.3a3.8 3.8 0 0 1 0 5.4M15.3 5a7 7 0 0 1 0 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </button>
-        <button type="button" class="ghost tuner-only running-only" id="stop">Stop</button>
-        <button type="button" class="ghost tempo-only" id="tempo-reset">Reset</button>
-        <button type="button" class="ghost analysis-only report-only" id="analysis-new">New file</button>
-        <button type="button" class="ghost icon" id="theme" aria-label="Theme">
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/>
-          </svg>
-        </button>
+      <div class="toolbar">
+        <div class="field input-only">
+          <label for="device">Input</label>
+          <select id="device" title="Audio input device"></select>
+        </div>
+        <div class="field input-only" id="channel-field" hidden>
+          <label for="channel">Channel</label>
+          <select id="channel" title="Which input channel of the interface to listen to">
+            <option value="mix">1 + 2</option>
+            <option value="0">1</option>
+            <option value="1">2</option>
+          </select>
+        </div>
+        <div class="field tuner-only">
+          <label for="tuning">Tuning</label>
+          <select id="tuning"></select>
+        </div>
+        <div class="field tuner-only">
+          <label id="a4-label">A4</label>
+          <div class="stepper" role="group" aria-labelledby="a4-label">
+            <button type="button" id="a4-down" aria-label="Lower reference pitch">−</button>
+            <span id="a4">440</span>
+            <button type="button" id="a4-up" aria-label="Raise reference pitch">+</button>
+          </div>
+        </div>
+        <div class="field tempo-only">
+          <label for="beats">Beats</label>
+          <select id="beats" title="Beats per bar; the first one is accented">
+            <option value="1">1 · no accent</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+          </select>
+        </div>
+        <div class="field tempo-only">
+          <label for="subdivision">Subdivide</label>
+          <select id="subdivision" title="Quieter clicks between the beats">
+            <option value="1">Off</option>
+            <option value="2">Eighths</option>
+            <option value="3">Triplets</option>
+            <option value="4">Sixteenths</option>
+          </select>
+        </div>
+        <div class="field tempo-only">
+          <label for="count-in">Count-in</label>
+          <select id="count-in" title="Bars of plain beats before the pattern starts">
+            <option value="0">Off</option>
+            <option value="1">1 bar</option>
+            <option value="2">2 bars</option>
+          </select>
+        </div>
       </div>
     </header>
 
@@ -164,6 +169,41 @@
         </section>
       </div>
 
+      <div class="view record-only" id="record-view">
+        <section class="display rec-display">
+          <div class="rec-peak">
+            <span class="rec-peak-value" id="rec-peak">—</span>
+            <span class="rec-peak-unit">dBFS</span>
+          </div>
+          <div class="freq" id="rec-status" aria-live="polite">Play or sing the loudest part to set the gain</div>
+        </section>
+
+        <section class="meters" aria-label="Input level">
+          <div class="meter-rows" id="meter-rows"></div>
+          <div class="meter-scale" id="meter-scale" aria-hidden="true"></div>
+          <div class="meter-legend">
+            <span><i class="key-zone"></i>target for the loudest peaks, −18 to −12 dBFS</span>
+            <button type="button" class="link" id="peak-reset">Reset peak</button>
+          </div>
+        </section>
+
+        <div class="rec-controls">
+          <button type="button" class="record" id="record" aria-pressed="false">
+            <span class="rec-dot" aria-hidden="true"></span><span id="record-label">Record</span>
+          </button>
+          <span class="rec-time" id="rec-time">0:00</span>
+          <button type="button" class="ghost" id="noise-check" title="Measures five seconds of silence: noise floor, mains hum and signal-to-noise">Check room noise</button>
+        </div>
+
+        <section class="noise-result" id="noise-result" aria-live="polite" hidden></section>
+
+        <section class="takes" id="takes" hidden>
+          <h2>Takes</h2>
+          <ol class="take-list" id="take-list"></ol>
+          <p class="takes-note">Takes stay in this tab only — download the ones you want to keep.</p>
+        </section>
+      </div>
+
       <div class="view analysis-only" id="analysis-view">
         <section class="dropzone" id="dropzone">
           <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
@@ -192,12 +232,18 @@
 
       <div class="overlay" id="overlay">
         <div class="card">
-          <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <svg class="logo tuner-only" viewBox="0 0 32 32" aria-hidden="true">
             <circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="2.5"/>
             <rect x="14.75" y="8" width="2.5" height="16" rx="1.25" fill="currentColor"/>
           </svg>
-          <h1>Tuner</h1>
-          <p>Plug in, pick your audio interface when the browser asks, and play a string.</p>
+          <svg class="logo record-only" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="2.5"/>
+            <circle cx="16" cy="16" r="6" fill="currentColor"/>
+          </svg>
+          <h1 class="tuner-only">Tuner</h1>
+          <h1 class="record-only">Record</h1>
+          <p class="tuner-only">Plug in, pick your audio interface when the browser asks, and play a string.</p>
+          <p class="record-only">Plug in and pick your audio interface when the browser asks. Set the gain with the meter, record, and check the take.</p>
           <button type="button" class="primary" id="start">Start listening</button>
           <p class="error" id="error" hidden></p>
         </div>
@@ -210,6 +256,7 @@
   <script src="metronome.js"></script>
   <script src="analysis.js"></script>
   <script src="report.js"></script>
+  <script src="recorder.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

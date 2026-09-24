@@ -23,13 +23,16 @@ function loaded() {
   manifest.icons.forEach((icon) => refs.push(icon.src));
   const worker = /importScripts\(([^)]*)\)/.exec(read('analysis-worker.js'));
   Array.from(worker[1].matchAll(/'([^']+)'/g), (x) => refs.push(x[1]));
-  refs.push('analysis-worker.js');       // started with new Worker() from app.js
+  // Scripts app.js starts itself: the analysis worker and the capture worklet.
+  Array.from(read('app.js').matchAll(/(?:new Worker|addModule)\('([^']+)'\)/g), (x) => refs.push(x[1]));
   return Array.from(new Set(refs));
 }
 
 test('everything the app loads is precached for offline use', () => {
+  const refs = loaded();
+  assert.ok(refs.includes('recorder-worklet.js') && refs.includes('analysis-worker.js'), 'the scan misses scripts started from app.js');
   const files = precached();
-  const missing = loaded().filter((ref) => !files.includes(ref));
+  const missing = refs.filter((ref) => !files.includes(ref));
   assert.deepEqual(missing, []);
 });
 

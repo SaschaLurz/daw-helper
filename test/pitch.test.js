@@ -116,6 +116,77 @@ test('note helpers map frequencies to notes', () => {
   assert.ok(Math.abs(Pitch.midiToFreq(40, 440) - 82.407) < 0.01);
 });
 
+// A bass note as a pickup delivers it: the fundamental weaker than the octave
+// above, stiff-string overtones that run slightly sharp (inharmonicity B), a
+// decay and some noise.
+function bassTone(freq, opts = {}) {
+  const size = opts.size || BASS_SIZE;
+  const harmonics = opts.harmonics || [0.45, 1, 0.7, 0.45, 0.3, 0.2, 0.12, 0.08];
+  const B = opts.inharmonicity === undefined ? 0 : opts.inharmonicity;
+  const rand = makeRandom(opts.seed || 3);
+  const decay = opts.decay === undefined ? 1.5 : opts.decay;   // per second
+  const out = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    const t = i / SAMPLE_RATE;
+    let v = 0;
+    for (let k = 0; k < harmonics.length; k++) {
+      const n = k + 1;
+      v += harmonics[k] * Math.sin(2 * Math.PI * freq * n * Math.sqrt(1 + B * n * n) * t + k * 1.3);
+    }
+    out[i] = 0.25 * Math.exp(-decay * t) * v + 0.003 * rand();
+  }
+  return out;
+}
+
+const BASS_SIZE = 8192;
+const bassDetector = () => Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: BASS_SIZE, minFreq: 24 });
+// B0 (5-string) up to C3 (top string of a 6-string bass).
+const BASS_STRINGS = [23, 26, 28, 33, 38, 43, 48].map((m) => Pitch.midiToFreq(m, 440));
+
+test('bass strings from low B to high C are detected within half a cent', () => {
+  const det = bassDetector();
+  for (const f of BASS_STRINGS) {
+    const r = det.detect(bassTone(f));
+    assert.ok(r.frequency > 0, `${f.toFixed(2)} Hz: no pitch (clarity ${r.clarity.toFixed(3)})`);
+    const err = centsBetween(r.frequency, f);
+    assert.ok(Math.abs(err) < 0.5, `${f.toFixed(2)} Hz → ${r.frequency.toFixed(3)} Hz (${err.toFixed(2)} cents off)`);
+  }
+});
+
+test('a low E whose fundamental is almost missing still reads E1, not E2', () => {
+  const det = bassDetector();
+  const e1 = Pitch.midiToFreq(28, 440);
+  for (const harmonics of [[0.2, 1, 0.8, 0.5, 0.3], [0.1, 1, 0.3, 0.6, 0.2, 0.3], [0.15, 0.6, 1, 0.4, 0.2]]) {
+    const r = det.detect(bassTone(e1, { harmonics }));
+    const err = centsBetween(r.frequency, e1);
+    assert.ok(Math.abs(err) < 1, `[${harmonics}] → ${r.frequency.toFixed(3)} Hz (${err.toFixed(2)} cents off)`);
+  }
+});
+
+test('detuned low strings are tracked, including stiff-string overtones', () => {
+  const det = bassDetector();
+  for (const midi of [23, 28, 33]) {
+    for (const offset of [-40, -8, 0, 5, 30]) {
+      const f = Pitch.midiToFreq(midi, 440) * Math.pow(2, offset / 1200);
+      const clean = centsBetween(det.detect(bassTone(f)).frequency, f);
+      assert.ok(Math.abs(clean) < 0.5, `midi ${midi} ${offset}c → ${clean.toFixed(2)} cents off`);
+      // Real strings: overtones slightly sharp. The reading may lean a little sharp too, like any tuner.
+      const stiff = centsBetween(det.detect(bassTone(f, { inharmonicity: 1e-4 })).frequency, f);
+      assert.ok(stiff > -0.5 && stiff < 1.5, `midi ${midi} ${offset}c stiff → ${stiff.toFixed(2)} cents off`);
+    }
+  }
+});
+
+test('a quiet, decaying low E is still picked up', () => {
+  const det = bassDetector();
+  const e1 = Pitch.midiToFreq(28, 440);
+  // About −40 dBFS and fading fast: the tail end of a note.
+  const quiet = bassTone(e1, { decay: 6 }).map((v) => v * 0.05);
+  const r = det.detect(quiet);
+  assert.ok(r.frequency > 0, `no pitch, rms ${r.rms.toFixed(4)}, clarity ${r.clarity.toFixed(3)}`);
+  assert.ok(Math.abs(centsBetween(r.frequency, e1)) < 1, `${r.frequency.toFixed(3)} Hz`);
+});
+
 test('detection is fast enough for real-time use', () => {
   const det = Pitch.createDetector({ sampleRate: SAMPLE_RATE, bufferSize: SIZE });
   const samples = tone(82.41);
@@ -125,5 +196,17 @@ test('detection is fast enough for real-time use', () => {
   for (let i = 0; i < runs; i++) det.detect(samples);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6 / runs;
   console.log(`  detect(): ${ms.toFixed(2)} ms per ${SIZE}-sample window`);
+  assert.ok(ms < 15, `too slow: ${ms.toFixed(2)} ms`);
+});
+
+test('bass detection (longer window, lower range) is fast enough too', () => {
+  const det = bassDetector();
+  const samples = bassTone(41.2);
+  det.detect(samples);
+  const runs = 30;
+  const t0 = process.hrtime.bigint();
+  for (let i = 0; i < runs; i++) det.detect(samples);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6 / runs;
+  console.log(`  detect(): ${ms.toFixed(2)} ms per ${BASS_SIZE}-sample bass window`);
   assert.ok(ms < 15, `too slow: ${ms.toFixed(2)} ms`);
 });

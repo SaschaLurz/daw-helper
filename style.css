@@ -83,6 +83,8 @@ button, select { font: inherit; color: inherit; }
 /* ---------- modes ---------- */
 
 .app:not(.mode-tuner) .tuner-only,
+.app:not(.mode-record) .record-only,
+.app:not(.mode-tuner):not(.mode-record) .input-only,
 .app:not(.mode-tempo) .tempo-only,
 .app:not(.mode-analysis) .analysis-only,
 .app:not(.running) .running-only,
@@ -105,12 +107,23 @@ button, select { font: inherit; color: inherit; }
 
 /* ---------- top bar ---------- */
 
+/* Row 1: modes and buttons. Row 2: the current mode's settings. */
 .bar {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bar-top,
+.toolbar {
+  display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
   gap: 10px 12px;
 }
+
+.bar-top { align-items: center; }
+.toolbar { align-items: flex-end; }
+.mode-analysis .toolbar { display: none; }
 
 /* Buttons stay together on the right, also when the bar wraps. */
 .bar-actions {
@@ -151,7 +164,8 @@ select {
 
 select:hover, .stepper:hover, .ghost:hover, .segmented:hover { border-color: var(--dim); }
 select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper button:focus-visible,
-.seg:focus-visible, .tap:focus-visible, .nudge:focus-visible, .play:focus-visible {
+.seg:focus-visible, .tap:focus-visible, .nudge:focus-visible, .play:focus-visible,
+.record:focus-visible, .clip:focus-visible, .link:focus-visible, .take-play:focus-visible {
   outline: 2px solid var(--muted);
   outline-offset: 2px;
 }
@@ -251,7 +265,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 36px 0 12px;
+  padding: 20px 0 12px;
 }
 
 .note {
@@ -369,17 +383,24 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 
 /* ---------- strings ---------- */
 
+/* Up to eight strings: buttons shrink to fit the row (--n is set from the tuning). */
 .strings {
+  --n: 6;
+  --gap: 12px;
+  --max: 64px;
+  container-type: inline-size;
   display: flex;
   justify-content: center;
-  gap: 12px;
+  gap: var(--gap);
   margin-top: 32px;
 }
 
 .string {
+  --size: min(var(--max), calc((100cqw - (var(--n) - 1) * var(--gap)) / var(--n)));
   position: relative;
-  width: 64px;
-  height: 64px;
+  flex: none;
+  width: var(--size);
+  height: var(--size);
   border: 1.5px solid var(--line);
   border-radius: 50%;
   background: transparent;
@@ -395,9 +416,9 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 .string:hover { border-color: var(--dim); }
 
 .string .s-name {
-  font-size: 24px;
+  font-size: calc(var(--size) * 0.375);
   font-weight: 300;
-  line-height: 64px;
+  line-height: var(--size);
 }
 
 .string .s-name sup {
@@ -408,7 +429,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 .string .s-oct {
-  font-size: 12px;
+  font-size: calc(var(--size) * 0.19);
   margin-left: 2px;
 }
 
@@ -478,7 +499,8 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 }
 
 /* While the overlay is up, the tuner behind it is a faint ghost. */
-.mode-tuner:not(.running):not(.tone-on) #tuner-view {
+.mode-tuner:not(.running):not(.tone-on) #tuner-view,
+.mode-record:not(.running) #record-view {
   opacity: 0.16;
   filter: blur(6px);
   pointer-events: none;
@@ -683,7 +705,7 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 
 .clicking .play { border-color: var(--green); color: var(--green); }
 
-.clicking .play-icon {
+.clicking .play .play-icon {
   width: 9px;
   height: 9px;
   border: 0;
@@ -757,6 +779,330 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 .lengths tbody th { color: var(--muted); }
 .lengths td { color: var(--text); }
 .lengths tbody tr > * { border-top: 1px solid var(--line); }
+
+/* ---------- record ---------- */
+
+.rec-display { flex: none; padding-top: 34px; }
+
+.rec-display[data-status="good"] { --status: var(--green); }
+.rec-display[data-status="warn"] { --status: var(--amber); }
+.rec-display[data-status="bad"] { --status: var(--red); }
+
+.rec-peak {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  font-size: min(clamp(84px, 16vw, 132px), 20vh);
+  line-height: 1;
+}
+
+.rec-peak-value {
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--status, var(--dim));
+  transition: color 180ms ease;
+}
+
+.rec-peak-unit {
+  margin-left: 0.2em;
+  font-size: 0.16em;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.rec-display .freq { color: var(--status, var(--muted)); }
+
+/* level meter: one row per channel, a scale that lines up with the tracks */
+
+.meters { margin-top: 30px; }
+
+.meter-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meter-row,
+.meter-scale {
+  display: grid;
+  grid-template-columns: 14px 1fr 48px 44px;
+  align-items: center;
+  gap: 12px;
+}
+
+.meter-row { --bar: var(--muted); }
+.meter-row[data-zone="good"] { --bar: var(--green); }
+.meter-row[data-zone="hot"] { --bar: var(--amber); }
+.meter-row[data-zone="over"] { --bar: var(--red); }
+
+.meter-label { font-size: 12px; color: var(--muted); text-align: center; }
+
+.meter-track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.meter-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--green) 24%, transparent);
+}
+
+.meter-bar {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: var(--bar);
+}
+
+.meter-peak { opacity: 0.4; }
+
+.meter-hold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  opacity: 0;
+}
+
+.meter-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text);
+}
+
+.clip {
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.clip.on { border-color: var(--red); background: var(--red); color: var(--bg); }
+
+.meter-scale { margin-top: 6px; }
+.meter-ticks { position: relative; height: 14px; }
+
+.meter-ticks span {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-ticks span:first-child { transform: none; }
+.meter-ticks span:last-child { transform: translateX(-100%); }
+
+.meter-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  margin-top: 12px;
+  padding-left: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.key-zone {
+  display: inline-block;
+  width: 14px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--green) 24%, transparent);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link:hover { color: var(--text); }
+
+/* record button */
+
+.rec-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 16px;
+  margin-top: 34px;
+}
+
+.record {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 24px 0 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.record:hover { border-color: var(--dim); }
+.record:disabled, .ghost:disabled { opacity: 0.5; cursor: default; }
+
+.rec-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.recording .record { border-color: var(--red); color: var(--red); }
+.recording .rec-dot { border-radius: 3px; animation: rec-pulse 1s ease-in-out infinite; }
+
+@keyframes rec-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording .rec-dot { animation: none; }
+}
+
+.rec-time {
+  min-width: 4ch;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.recording .rec-time { color: var(--red); }
+
+/* room noise result */
+
+.noise-result {
+  margin-top: 26px;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--status, var(--line));
+  border-radius: 12px;
+  background: var(--bg-elev);
+}
+
+.noise-result header { display: flex; align-items: center; gap: 9px; }
+.noise-result h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 500; }
+.noise-text { margin: 8px 0 0; color: var(--muted); line-height: 1.5; }
+.noise-count { margin: 0; font-size: 17px; font-variant-numeric: tabular-nums; }
+.noise-hint { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+
+.noise-result ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.noise-result li {
+  display: grid;
+  grid-template-columns: 8px auto 1fr;
+  align-items: center;
+  column-gap: 9px;
+  font-size: 14px;
+}
+
+.nr-label { color: var(--muted); }
+.nr-value { color: var(--text); }
+.nr-text { grid-column: 2 / 4; margin-top: 3px; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.nr-warning { margin: 12px 0 0; font-size: 13px; color: var(--amber); }
+
+/* takes */
+
+.takes { margin-top: 30px; }
+
+.takes h2 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.take-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.take {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elev);
+}
+
+.take-play {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0 0 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.take-play:hover { border-color: var(--dim); }
+.take-play.playing { padding: 0; border-color: var(--green); color: var(--green); }
+
+.take-play.playing .play-icon {
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+.take-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.take-name { font-size: 14px; }
+.take-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.take-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ghost.small { height: 28px; padding: 0 10px; font-size: 12px; }
+.takes-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
 
 /* ---------- analysis ---------- */
 
@@ -1152,12 +1498,13 @@ select:focus-visible, .ghost:focus-visible, .string:focus-visible, .stepper butt
 
 @media (max-width: 520px) {
   .app { padding: 16px 16px 22px; }
-  .bar { gap: 10px 12px; }
+  .bar { gap: 12px; }
+  .meter-row, .meter-scale { grid-template-columns: 12px 1fr 42px 40px; gap: 8px; }
+  .meter-legend { padding-left: 20px; }
+  .take { flex-wrap: wrap; }
+  .take-actions { width: 100%; justify-content: flex-start; padding-left: 46px; }
   select { max-width: 200px; }
-  .strings { gap: 8px; margin-top: 26px; }
-  .string { width: 50px; height: 50px; }
-  .string .s-name { font-size: 20px; line-height: 50px; }
-  .string .s-oct { font-size: 11px; }
+  .strings { --gap: 8px; --max: 50px; margin-top: 26px; }
   .tick-label { font-size: 26px; }
   .tap-area { height: 180px; }
   .tap-ring, .tap { width: 130px; height: 130px; }

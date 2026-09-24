@@ -8,6 +8,10 @@
  * interpolation. Picking the *first* qualifying maximum (rather than the
  * tallest) is what keeps octave errors away on harmonically rich guitar tones.
  *
+ * The autocorrelation behind the NSDF is computed for every lag at once with
+ * an FFT, so long windows and low notes (a bass's low B needs lags past 1500
+ * samples) cost little more than a guitar's.
+ *
  * Loaded as a plain <script> in the browser (window.Pitch) and via require()
  * in Node for the tests.
  */
@@ -41,6 +45,11 @@
     const nsdf = new Float32Array(maxLag + 2);
     const energy = new Float64Array(size + 1); // prefix sums of x²
     const peaks = new Int32Array(maxLag + 2);
+    // Zero-padding to twice the window turns the FFT's circular correlation into a linear one.
+    const fftSize = nextPow2(2 * size);
+    const fft = createFft(fftSize);
+    const re = new Float64Array(fftSize);
+    const im = new Float64Array(fftSize);
 
     function detect(input) {
       // Remove DC and measure level.
@@ -59,11 +68,23 @@
       energy[0] = 0;
       for (let i = 0; i < size; i++) energy[i + 1] = energy[i] + x[i] * x[i];
 
+      // acf(τ) = Σ x[j]·x[j+τ] for all τ: the inverse transform of the power
+      // spectrum. That spectrum is real and even, so a forward FFT inverts it
+      // too (up to a factor of fftSize).
+      re.fill(0);
+      im.fill(0);
+      re.set(x);
+      fft(re, im);
+      for (let k = 0; k < fftSize; k++) {
+        re[k] = re[k] * re[k] + im[k] * im[k];
+        im[k] = 0;
+      }
+      fft(re, im);
+
       // NSDF: 2·acf(τ) / (Σx[j]² + Σx[j+τ]²), both energy terms from prefix sums.
       for (let tau = 0; tau <= maxLag; tau++) {
         const n = size - tau;
-        let acf = 0;
-        for (let j = 0; j < n; j++) acf += x[j] * x[j + tau];
+        const acf = re[tau] / fftSize;
         const m = energy[n] + (energy[size] - energy[tau]);
         nsdf[tau] = m > 0 ? (2 * acf) / m : 0;
       }
@@ -117,6 +138,53 @@
     }
 
     return { detect, sampleRate, bufferSize: size };
+  }
+
+  function nextPow2(v) {
+    let n = 1;
+    while (n < v) n *= 2;
+    return n;
+  }
+
+  /** In-place radix-2 forward FFT of length n (a power of two) on separate real/imaginary arrays. */
+  function createFft(n) {
+    const bits = Math.round(Math.log2(n));
+    const rev = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+      let r = 0;
+      for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b);
+      rev[i] = r;
+    }
+    const cos = new Float64Array(n / 2);
+    const sin = new Float64Array(n / 2);
+    for (let i = 0; i < n / 2; i++) {
+      cos[i] = Math.cos((2 * Math.PI * i) / n);
+      sin[i] = Math.sin((2 * Math.PI * i) / n);
+    }
+    return function fft(re, im) {
+      for (let i = 0; i < n; i++) {
+        const j = rev[i];
+        if (j > i) {
+          let t = re[i]; re[i] = re[j]; re[j] = t;
+          t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+      }
+      for (let len = 2; len <= n; len *= 2) {
+        const half = len / 2;
+        const step = n / len;
+        for (let start = 0; start < n; start += len) {
+          for (let j = start, k = 0; j < start + half; j++, k += step) {
+            const l = j + half;
+            const tre = re[l] * cos[k] + im[l] * sin[k];
+            const tim = im[l] * cos[k] - re[l] * sin[k];
+            re[l] = re[j] - tre;
+            im[l] = im[j] - tim;
+            re[j] += tre;
+            im[j] += tim;
+          }
+        }
+      }
+    };
   }
 
   function freqToMidi(frequency, a4) {

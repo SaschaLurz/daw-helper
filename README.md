@@ -3,12 +3,15 @@
 A small, clean toolbox for home recording that runs in your browser and talks
 directly to your audio interface. No dependencies, no build step, no account.
 
-Today it does three things well:
+Today it does four things well:
 
-| Tuner | Tempo | Analysis |
-| --- | --- | --- |
-| ![Guitar tuner showing E2 in tune](docs/tuner.png) | ![Tempo mode at 120 BPM with the metronome running](docs/tempo.png) | ![Recording check of a vocal take](docs/analysis.png) |
-| Chromatic tuner for guitar, ukulele and mandolin, accurate to well under a cent, with reference tones | Tap tempo, a metronome with accents, subdivisions and count-in, and delay/LFO times | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
+| Tuner | Tempo |
+| --- | --- |
+| ![Tuner showing a bass's low E in tune](docs/tuner.png) | ![Tempo mode at 120 BPM with the metronome running](docs/tempo.png) |
+| Chromatic tuner for guitar (6–8 strings), bass (4–6 strings), ukulele and mandolin, accurate to well under a cent, with reference tones | Tap tempo, a metronome with accents, subdivisions and count-in, and delay/LFO times |
+| **Record** | **Analysis** |
+| ![Record mode with the level meter in the target zone and a take](docs/record.png) | ![Recording check of a vocal take](docs/analysis.png) |
+| A gain-staging meter, a room-noise check and a quick recorder that saves WAV files and hands takes to the analysis | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
 
 ## Getting started
 
@@ -46,8 +49,9 @@ D2 while you're aiming for E2) the hint says *Tune up ↑ to E2*.
   if only one of them has the guitar plugged in, so noise on the other input
   can't interfere.
 - **Tuning** switches the string set. Guitar: Standard, Drop D, E♭ Standard,
-  D Standard, Drop C, DADGAD, Open G. Ukulele: standard GCEA (high G),
-  low G and baritone (DGBE). Mandolin: GDAE.
+  D Standard, Drop C, DADGAD, Open G, 7-string (low B) and 8-string (low F♯).
+  Bass: standard EADG, Drop D, E♭, 5-string (low B) and 6-string (low B, high
+  C). Ukulele: standard GCEA (high G), low G and baritone (DGBE). Mandolin: GDAE.
 - **A4** sets the reference pitch (415–466 Hz).
 - **Click a string** to lock the tuner to it, which helps when a string is a
   long way off or you're fitting new strings. Click again or press Escape to
@@ -64,10 +68,19 @@ D2 while you're aiming for E2) the hint says *Tune up ↑ to E2*.
 
 Under the hood the browser's own audio processing (echo cancellation, noise
 suppression, automatic gain) is switched off, since it wrecks pitch tracking.
-The signal passes a 35 Hz high-pass and a 2.2 kHz low-pass and is analysed
-every 20 ms with the [McLeod Pitch Method](https://www.cs.otago.ac.nz/tartini/papers/A_Smarter_Way_to_Find_Pitch.pdf),
-which copes well with the strong harmonics of a guitar without octave errors.
-A short median filter keeps the reading from jittering.
+The signal passes a high-pass and a 2.2 kHz low-pass and is analysed every
+20 ms with the [McLeod Pitch Method](https://www.cs.otago.ac.nz/tartini/papers/A_Smarter_Way_to_Find_Pitch.pdf),
+which copes well with strong harmonics without octave errors. A short median
+filter keeps the reading from jittering.
+
+Low strings are where many tuners give up: a bass's low E sits at 41 Hz, a
+five-string's low B at 31 Hz, and from a bass pickup the fundamental is often
+weaker than the octave above it. So the detector adapts to the tuning. It
+looks at a window of at least four cycles of the lowest string (170 ms for
+bass, 85 ms for guitar), searches down to three quarters of that string's
+frequency, and the high-pass drops from 35 Hz to below the lowest string. The
+autocorrelation behind the method is computed with an FFT, which keeps even
+the long bass window at about a millisecond of work per reading.
 
 ## Tempo
 
@@ -106,10 +119,42 @@ delay times, reverb pre-delay or compressor release, or in Hz for LFO rates.
 
 Tempo mode does not need microphone access.
 
+## Record
+
+Switch to **Record**, click **Start listening** and pick your interface. The
+input and channel are shared with the tuner.
+
+**Setting the gain.** Play or sing the loudest part of the song. The big number
+is the loudest peak since you last pressed **Reset peak**, and the line under it
+says what to do: turn up, turn down, or leave it. The target for the loudest
+peaks is −18 to −12 dBFS (the green zone on the meter), the same target the
+Analysis report uses; below −24 the recording will be noisier than it needs to
+be, above −6 a louder moment may clip. The meter shows each input channel: the
+bright bar is the RMS level over 300 ms, the paler bar the peak, which falls
+back at 20 dB per second, and the white mark the peak hold. **Clip** lights up
+when a sample reaches full scale and stays lit until you click it (or reset the
+peak). The meter sees every sample, because it runs in an AudioWorklet next to
+the audio rather than at the screen's frame rate, so no peak slips through.
+
+**Recording.** **Record** captures the input exactly as it arrives (both
+channels when **Channel** is 1 + 2, otherwise the one you picked) for up to ten
+minutes. Every take gets a row: play it, save it as a 24-bit **WAV**, **Check**
+it (which opens it in Analysis as if you had dropped the file there), or
+delete it. Takes live in memory in this tab only, so download the ones you
+want to keep. They are recorded at the rate the browser runs its audio at,
+usually 48 kHz.
+
+**Check room noise** records five seconds of silence at the current gain
+(don't play or touch anything) and reports the noise floor, any 50 or 60 Hz
+mains hum, and the signal-to-noise ratio you will get: from the loudest peak
+measured before the check, or assuming peaks at −12 dBFS if you haven't played
+yet. The first half second is skipped, so the click that started the check
+doesn't count.
+
 ## Analysis
 
 Switch to **Analysis** and drop a recording onto the page (or click **Choose a
-file**). WAV, MP3, FLAC and M4A work; nothing is uploaded — the file is decoded
+file**, or press **Check** on a take in Record mode). WAV, MP3, FLAC and M4A work; nothing is uploaded — the file is decoded
 and measured in your browser, in a Web Worker so the page stays responsive.
 Files longer than five minutes are cut to the first five.
 
@@ -158,13 +203,15 @@ the hum check, which needs about 3 Hz of resolution and averages a longer FFT.
 index.html            page structure
 style.css             all styling (dark and light theme, single accent colour)
 app.js                audio setup, device handling, rendering, reference tone, tempo UI and
-                      metronome sound, file loading and the report
+                      metronome sound, Record mode, file loading and the report
 pitch.js              pitch detection (McLeod Pitch Method) and note maths
 tempo.js              tap-tempo estimation, note lengths, typed-tempo parsing
 metronome.js          the metronome's timing: beats, accents, subdivisions, count-in
 analysis.js           file-header sniffing, FFT/STFT and every measurement of the analysis
 analysis-worker.js    runs analysis.js off the main thread
 report.js             statuses, target ranges, explanations and the summary of the analysis
+recorder.js           meter ballistics, level advice, WAV encoding, room-noise verdict
+recorder-worklet.js   AudioWorklet that meters every sample and captures takes
 sw.js                 service worker: offline support (network first, cache as fallback)
 manifest.webmanifest  install metadata; icons/ holds the app icons
 serve.js              dependency-free static server for local use
@@ -172,10 +219,10 @@ test/                 unit tests for the scripts above, plus a check that sw.js 
 docs/                 screenshots
 ```
 
-`pitch.js`, `tempo.js`, `metronome.js`, `analysis.js` and `report.js` are plain
-scripts that also work under `require()`, which is how the tests load them.
-When the page starts loading a new file, add it to the `FILES` list in `sw.js`
-(the tests fail until you do).
+`pitch.js`, `tempo.js`, `metronome.js`, `analysis.js`, `report.js` and
+`recorder.js` are plain scripts that also work under `require()`, which is how
+the tests load them. When the page starts loading a new file, add it to the
+`FILES` list in `sw.js` (the tests fail until you do).
 
 ## Tests
 
@@ -184,8 +231,10 @@ npm test
 ```
 
 The pitch tests run the detector against synthetic guitar tones (open strings,
-detuned strings, dominant second harmonics, noise, DC offset) and the ukulele
-and mandolin range, and check it stays within half a cent. The tempo tests feed
+detuned strings, dominant second harmonics, noise, DC offset), the ukulele and
+mandolin range, and bass notes from low B to high C with a weak fundamental,
+stiff-string overtones, decay and noise, and check it stays within half a cent
+and that a low E never reads as E2. The tempo tests feed
 simulated tap sequences: steady beats, human jitter, mis-taps, pauses, tempo
 changes and bounced double events, and check the note lengths and typed-tempo
 parsing. The metronome tests check tick times, accents, subdivisions, count-in
@@ -194,7 +243,10 @@ analysis tests parse hand-built WAV, FLAC, MP3 and M4A headers, check the
 K-weighting filter against the coefficients in BS.1770 and a −20 dBFS sine
 against −23 LUFS, and run synthetic takes with known noise, clipping, gaps,
 jumps, rumble, plosives, sibilance and 50/60 Hz hum through every measurement.
-The report tests cover the thresholds and the ordering of the advice.
+The report tests cover the thresholds and the ordering of the advice. The
+recorder tests check the meter's ballistics, the level advice, that WAV files
+round-trip sample for sample and parse with the analysis's own header reader,
+and the room-noise verdict on synthetic hiss, hum and silence.
 
 ## Ideas for what to build next
 
@@ -209,19 +261,12 @@ roughly in the order they'd be useful:
 
 **Tuning and pitch**
 
-- **More instruments** — bass (4/5/6-string), 7- and 8-string guitar, and a
-  custom tuning editor. Bass needs the detector's range taken down from 55 Hz
-  to about 28 Hz.
+- **Custom tunings** — an editor for your own string sets.
 - **Intonation helper** — compare the open string with the 12th-fret reading
   per string and say which way to move the saddle.
 
 **Levels and signal**
 
-- **Gain-staging meter** — peak and RMS with hold and a clip indicator, plus a
-  target range so it's obvious when the interface gain is set well.
-- **Live noise floor check** — Analysis already measures noise and hum in a
-  file; this would do the same on the live input, e.g. from ten seconds of
-  room silence.
 - **Round-trip latency test** — send a click out of the interface, capture it
   on the input, and report the latency in milliseconds and samples for setting
   the DAW's compensation.
@@ -233,8 +278,6 @@ roughly in the order they'd be useful:
   checking headphones, monitors and the room.
 - **Frequency cheat sheet** — instrument ranges, EQ trouble spots and a
   note ↔ Hz ↔ MIDI converter that can play any note.
-- **Quick recorder** — capture a short idea from the interface and download it
-  as a WAV file before it's forgotten.
 - **Session notes** — BPM, key, tuning and capo per song, saved locally.
 
 **The app itself**
