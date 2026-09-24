@@ -14,6 +14,7 @@
       <div class="segmented" role="tablist" aria-label="Mode">
         <button type="button" class="seg active" role="tab" aria-selected="true" data-mode="tuner">Tuner</button>
         <button type="button" class="seg" role="tab" aria-selected="false" data-mode="tempo">Tempo</button>
+        <button type="button" class="seg" role="tab" aria-selected="false" data-mode="analysis">Analysis</button>
       </div>
       <div class="field tuner-only">
         <label for="device">Input</label>
@@ -42,6 +43,7 @@
       <div class="spacer"></div>
       <button type="button" class="ghost tuner-only running-only" id="stop">Stop</button>
       <button type="button" class="ghost tempo-only" id="tempo-reset">Reset</button>
+      <button type="button" class="ghost analysis-only report-only" id="analysis-new">New file</button>
     </header>
 
     <div class="panel">
@@ -83,6 +85,32 @@
         <div class="hint" id="tempo-hint">Click, or press the space bar · pause to start over</div>
       </div>
 
+      <div class="view analysis-only" id="analysis-view">
+        <section class="dropzone" id="dropzone">
+          <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M6 20v-8M11 24V8M16 21V11M21 26V6M26 19v-6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          <h1>Recording check</h1>
+          <p>Drop a vocal take here and get its levels, noise, clipping, plosives, hum and more explained in plain words. Nothing leaves your computer.</p>
+          <button type="button" class="primary" id="browse">Choose a file</button>
+          <input type="file" id="file" accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,audio/*" hidden>
+          <p class="dz-note">WAV, MP3, FLAC or M4A · up to five minutes are analysed</p>
+          <p class="error" id="analysis-error" hidden></p>
+        </section>
+
+        <section class="progress" id="progress" hidden aria-live="polite">
+          <div class="progress-text" id="progress-text">Reading file…</div>
+          <div class="level-bar"><div class="level-fill" id="progress-fill"></div></div>
+        </section>
+
+        <section class="report" id="report" hidden>
+          <header class="file-info" id="file-info"></header>
+          <div class="headline" id="headline"></div>
+          <div class="items" id="items"></div>
+          <section class="summary" id="summary"></section>
+        </section>
+      </div>
+
       <div class="overlay" id="overlay">
         <div class="card">
           <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
@@ -100,6 +128,8 @@
 
   <script src="pitch.js"></script>
   <script src="tempo.js"></script>
+  <script src="analysis.js"></script>
+  <script src="report.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

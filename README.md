@@ -3,12 +3,12 @@
 A small, clean toolbox for home recording that runs in your browser and talks
 directly to your audio interface. No dependencies, no build step, no account.
 
-Today it does two things well:
+Today it does three things well:
 
-| Tuner | Tempo |
-| --- | --- |
-| ![Guitar tuner showing E2 in tune](docs/tuner.png) | ![Tap tempo showing 120 BPM](docs/tempo.png) |
-| Chromatic guitar tuner with string indicators, accurate to well under a cent | Tap-tempo counter that follows you as you tap |
+| Tuner | Tempo | Analysis |
+| --- | --- | --- |
+| ![Guitar tuner showing E2 in tune](docs/tuner.png) | ![Tap tempo showing 120 BPM](docs/tempo.png) | ![Recording check of a vocal take](docs/analysis.png) |
+| Chromatic guitar tuner with string indicators, accurate to well under a cent | Tap-tempo counter that follows you as you tap | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
 
 ## Getting started
 
@@ -67,21 +67,70 @@ measurement. Stray taps well off the beat are ignored, and if you drift to a
 different tempo without pausing the reading follows within a few taps.
 Tempo mode does not need microphone access.
 
+## Analysis
+
+Switch to **Analysis** and drop a recording onto the page (or click **Choose a
+file**). WAV, MP3, FLAC and M4A work; nothing is uploaded — the file is decoded
+and measured in your browser, in a Web Worker so the page stays responsive.
+Files longer than five minutes are cut to the first five.
+
+The report is written for people new to home recording. At the top sit the two
+numbers that matter most:
+
+- **Signal-to-noise ratio** — peak level minus noise floor. Under 40 dB is a
+  problem, 40–50 borderline, 50–60 good, above 60 very good.
+- **Noise at mix level** — where the background noise ends up once the take is
+  turned up to normal mix level (peaks at −3 dBFS). Above −50 dBFS it is clearly
+  audible; that is usually the number that makes the problem click.
+
+Below them, one card per measurement, each with the value, the target range, a
+colour-coded status and — on click — an explanation of what the number means,
+what too high or too low points at, and what to do about it:
+
+peak · true peak (4× oversampled) · RMS · crest factor · noise floor (5th
+percentile of 200 ms blocks, digital silence left out) · integrated loudness
+(ITU-R BS.1770-4, K-weighted and gated) · clipping (three or more full-scale
+samples in a row) · dropouts (runs of exact zeros, and isolated jumps a smooth
+waveform can't produce) · DC offset · rumble below 40 Hz · plosives · sibilance
+(5–9 kHz against the whole signal) · mains hum (50 or 60 Hz and harmonics,
+measured in the quiet passages) · spectral balance in nine bands · pitch range
+and steadiness, using the tuner's detector, shown only when the material is
+clearly tonal.
+
+Clipping, dropouts, plosives and sibilance come with timestamps; click one to
+hear three seconds around it. The summary at the bottom turns the statuses into
+a short, prioritised list of things to do — clipping first, then dropouts, then
+noise and level, then the rest — or says plainly that there is nothing to fix.
+
+A few honest limits: the tool measures, it does not diagnose. It cannot tell
+whether noise comes from the room, the preamp or the microphone, or whether
+low-frequency energy is a plosive or a low note, and values such as crest
+factor, loudness and spectral balance depend heavily on what was sung. The
+texts say so. Technically: the native sample rate is read from the file header
+and decoding happens at that rate, because `decodeAudioData` would otherwise
+resample; identical stereo channels (dual mono) and stereo files with one empty
+side are analysed as one channel, other stereo files as their mono sum; all
+spectral values come from one STFT (Hann, 4096 samples, 50 % overlap), except
+the hum check, which needs about 3 Hz of resolution and averages a longer FFT.
+
 ## Project layout
 
 ```
-index.html   page structure
-style.css    all styling (dark, single accent colour)
-app.js       audio setup, device handling, smoothing, rendering, tempo UI
-pitch.js     pitch detection (McLeod Pitch Method) and note maths
-tempo.js     tap-tempo estimation
-serve.js     dependency-free static server for local use
-test/        unit tests for pitch.js and tempo.js
-docs/        screenshots
+index.html          page structure
+style.css           all styling (dark, single accent colour)
+app.js              audio setup, device handling, rendering, tempo UI, file loading and the report
+pitch.js            pitch detection (McLeod Pitch Method) and note maths
+tempo.js            tap-tempo estimation
+analysis.js         file-header sniffing, FFT/STFT and every measurement of the analysis
+analysis-worker.js  runs analysis.js off the main thread
+report.js           statuses, target ranges, explanations and the summary of the analysis
+serve.js            dependency-free static server for local use
+test/               unit tests for pitch.js, tempo.js, analysis.js and report.js
+docs/               screenshots
 ```
 
-`pitch.js` and `tempo.js` are plain scripts that also work under `require()`,
-which is how the tests load them.
+`pitch.js`, `tempo.js`, `analysis.js` and `report.js` are plain scripts that
+also work under `require()`, which is how the tests load them.
 
 ## Tests
 
@@ -92,7 +141,12 @@ npm test
 The pitch tests run the detector against synthetic guitar tones (open strings,
 detuned strings, dominant second harmonics, noise, DC offset) and check it stays
 within half a cent. The tempo tests feed simulated tap sequences: steady beats,
-human jitter, mis-taps, pauses, tempo changes and bounced double events.
+human jitter, mis-taps, pauses, tempo changes and bounced double events. The
+analysis tests parse hand-built WAV, FLAC, MP3 and M4A headers, check the
+K-weighting filter against the coefficients in BS.1770 and a −20 dBFS sine
+against −23 LUFS, and run synthetic takes with known noise, clipping, gaps,
+jumps, rumble, plosives, sibilance and 50/60 Hz hum through every measurement.
+The report tests cover the thresholds and the ordering of the advice.
 
 ## Ideas for what to build next
 

@@ -6,6 +6,10 @@
  * → Pitch.detect() every ~20 ms → short median → display.
  *
  * Tempo mode needs no audio: taps (pointer or keyboard) go to Tempo.createTapTempo().
+ *
+ * Analysis mode takes a dropped file: header sniffed for the native sample
+ * rate → decodeAudioData in an offline context at that rate → channels handed
+ * to analysis-worker.js → Report.build() → cards, timestamps and a summary.
  */
 (function () {
   'use strict';
@@ -25,6 +29,10 @@
   const HISTORY_MS = 260;         // readings inside this window are median-filtered
   const ANALYSIS_INTERVAL_MS = 20;
   const RING_TIMEOUT_MS = 20000;  // stop pulsing the tempo ring this long after the last tap
+  const MAX_FILE_BYTES = 300 * 1024 * 1024;  // decodeAudioData holds the whole file in memory
+  const PLAY_LEAD_S = 0.5;        // an excerpt starts this long before its timestamp…
+  const PLAY_LENGTH_S = 3;        // …and lasts this long
+  const MODES = ['tuner', 'tempo', 'analysis'];
   const STORAGE_KEY = 'tuner.settings';
 
   // Meter geometry (SVG user units, viewBox 1000 × 170).
@@ -60,11 +68,26 @@
     tempoDetail: $('tempo-detail'),
     tap: $('tap'),
     tapRing: $('tap-ring'),
+    dropzone: $('dropzone'),
+    browse: $('browse'),
+    file: $('file'),
+    analysisError: $('analysis-error'),
+    analysisNew: $('analysis-new'),
+    progress: $('progress'),
+    progressText: $('progress-text'),
+    progressFill: $('progress-fill'),
+    report: $('report'),
+    fileInfo: $('file-info'),
+    headline: $('headline'),
+    items: $('items'),
+    summary: $('summary'),
   };
 
   const settings = loadSettings();
   const audio = { ctx: null, stream: null, nodes: [], analyser: null, buffer: null, detector: null, channels: 1 };
   const tapTempo = Tempo.createTapTempo();
+  const analysis = { worker: null, buffer: null, file: null, token: 0 };
+  const player = { source: null, button: null };
 
   let running = false;
   let lockedString = -1;          // index into the current tuning, or -1 for automatic
@@ -120,9 +143,7 @@
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('This browser cannot access audio input. Try Chrome, Edge or Firefox.');
       }
-      if (!audio.ctx) {
-        audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-      }
+      audioContext();
       if (audio.ctx.state === 'suspended') await audio.ctx.resume();
       await openStream(settings.deviceId);
       await refreshDevices();
@@ -331,7 +352,7 @@
         }
         render(now);
       }
-    } else {
+    } else if (settings.mode === 'tempo') {
       renderRing(now);
     }
     requestAnimationFrame(frame);
@@ -484,16 +505,376 @@
   }
 
   function setMode(mode) {
-    settings.mode = mode === 'tempo' ? 'tempo' : 'tuner';
+    settings.mode = MODES.includes(mode) ? mode : 'tuner';
     saveSettings();
-    ui.app.classList.toggle('mode-tuner', settings.mode === 'tuner');
-    ui.app.classList.toggle('mode-tempo', settings.mode === 'tempo');
+    MODES.forEach((m) => ui.app.classList.toggle(`mode-${m}`, settings.mode === m));
+    if (settings.mode !== 'analysis') stopPlayback();
     ui.segs.forEach((b) => {
       const active = b.dataset.mode === settings.mode;
       b.classList.toggle('active', active);
       b.setAttribute('aria-selected', String(active));
     });
     syncOverlay();
+  }
+
+  // ---------------------------------------------------------------- analysis
+
+  function audioContext() {
+    if (!audio.ctx) {
+      audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    }
+    return audio.ctx;
+  }
+
+  function showAnalysisStage(stage) {
+    ui.dropzone.hidden = stage !== 'drop';
+    ui.progress.hidden = stage !== 'progress';
+    ui.report.hidden = stage !== 'report';
+    ui.app.classList.toggle('has-report', stage !== 'drop'); // "New file" also cancels a running analysis
+  }
+
+  function showAnalysisError(message) {
+    showAnalysisStage('drop');
+    ui.analysisError.textContent = message;
+    ui.analysisError.hidden = false;
+  }
+
+  function setProgress(fraction, stage) {
+    const pct = Math.round(fraction * 100);
+    ui.progressFill.style.width = `${pct}%`;
+    ui.progressText.textContent = fraction > 0 ? `${stage} · ${pct} %` : stage;
+  }
+
+  function resetAnalysis() {
+    stopPlayback();
+    if (analysis.worker) {
+      analysis.worker.terminate();
+      analysis.worker = null;
+    }
+    analysis.token++;              // any decode still in flight belongs to an older file now
+    analysis.buffer = null;
+    analysis.file = null;
+    ui.analysisError.hidden = true;
+    ui.file.value = '';
+    showAnalysisStage('drop');
+  }
+
+  async function analyseFile(file) {
+    resetAnalysis();
+    const token = analysis.token;
+    if (file.size > MAX_FILE_BYTES) {
+      showAnalysisError(`That file is ${Math.round(file.size / 1048576)} MB, too big to decode in the browser. Export the first few minutes and try again.`);
+      return;
+    }
+    showAnalysisStage('progress');
+    setProgress(0, 'Reading file…');
+    try {
+      const bytes = await file.arrayBuffer();
+      if (token !== analysis.token) return;
+      const info = Analysis.sniff(bytes) || {};
+      setProgress(0, 'Decoding…');
+      const { buffer, rate } = await decodeAudio(bytes, info.sampleRate || 0);
+      if (token !== analysis.token) return;
+      analysis.buffer = buffer;
+      analysis.file = {
+        name: file.name,
+        info,
+        decodedAt: rate,
+        resampled: !info.sampleRate || rate !== info.sampleRate,
+        truncated: buffer.duration > Analysis.MAX_SECONDS,
+      };
+      runWorker(buffer, token);
+    } catch (err) {
+      if (token !== analysis.token) return;
+      showAnalysisError(decodeErrorMessage(err));
+    }
+  }
+
+  // decodeAudioData() resamples to the rate of its context, so decode in an
+  // offline context running at the file's own rate (read from the header). If
+  // the header could not be read, or the browser refuses that rate, 48 kHz it is.
+  async function decodeAudio(bytes, nativeRate) {
+    const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const rates = nativeRate && nativeRate !== 48000 ? [nativeRate, 48000] : [48000];
+    let lastError = null;
+    for (const rate of rates) {
+      let ctx;
+      try {
+        ctx = new Offline(1, 1, rate);
+      } catch (err) {
+        lastError = err;      // rate outside what this browser supports
+        continue;
+      }
+      try {
+        // Some browsers detach the buffer they are given, so each attempt gets a copy.
+        const buffer = await decodeWith(ctx, bytes.slice(0));
+        return { buffer, rate };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error('The file could not be decoded.');
+  }
+
+  function decodeWith(ctx, bytes) {
+    return new Promise((resolve, reject) => {
+      const p = ctx.decodeAudioData(bytes, resolve, reject);
+      if (p && p.then) p.then(resolve, reject);
+    });
+  }
+
+  function decodeErrorMessage(err) {
+    const text = (err && err.message) || String(err);
+    if (!err || err.name === 'EncodingError' || /decod/i.test(text)) {
+      return 'The browser could not decode this file. WAV, MP3, FLAC and M4A normally work; check that the file plays in a media player.';
+    }
+    return text;
+  }
+
+  function runWorker(buffer, token) {
+    const max = Math.floor(Analysis.MAX_SECONDS * buffer.sampleRate);
+    const channels = [];
+    const transfer = [];
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const data = buffer.getChannelData(c);
+      const copy = data.length > max ? data.slice(0, max) : data.slice();
+      channels.push(copy);
+      transfer.push(copy.buffer);
+    }
+    let worker;
+    try {
+      worker = new Worker('analysis-worker.js');
+    } catch (err) {
+      showAnalysisError('The analysis needs a Web Worker, which this browser refused to start. Serve the app with “npm start” rather than opening the file directly.');
+      return;
+    }
+    analysis.worker = worker;
+    const finish = () => {
+      worker.terminate();
+      if (analysis.worker === worker) analysis.worker = null;
+    };
+    worker.onmessage = (e) => {
+      if (token !== analysis.token) return;
+      const msg = e.data;
+      if (msg.type === 'progress') {
+        setProgress(msg.fraction, msg.stage);
+      } else if (msg.type === 'result') {
+        finish();
+        try {
+          renderReport(msg.result);
+        } catch (err) {
+          showAnalysisError(`The report could not be built: ${err.message}`);
+        }
+      } else if (msg.type === 'error') {
+        finish();
+        showAnalysisError(`The analysis failed: ${msg.message}`);
+      }
+    };
+    worker.onerror = (e) => {
+      if (token !== analysis.token) return;
+      finish();
+      showAnalysisError(`The analysis failed: ${e.message || 'unknown error'}`);
+    };
+    worker.postMessage({ channels, sampleRate: buffer.sampleRate }, transfer);
+  }
+
+  // ------------------------------------------------------- report rendering
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function fmtDuration(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds - m * 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  }
+
+  function renderReport(result) {
+    const report = Report.build(result);
+    ui.fileInfo.innerHTML = fileInfoMarkup(result);
+    ui.headline.innerHTML = report.headline.map(tileMarkup).join('');
+    ui.items.innerHTML = report.items.map(itemMarkup).join('');
+    ui.summary.className = `summary status-${report.summary.status}`;
+    ui.summary.innerHTML = summaryMarkup(report.summary);
+    showAnalysisStage('report');
+    window.scrollTo(0, 0);
+  }
+
+  function fileInfoMarkup(r) {
+    const { name, info, decodedAt, resampled, truncated } = analysis.file;
+    const buffer = analysis.buffer;
+    const facts = [fmtDuration(buffer.duration)];
+    facts.push(`${(r.sampleRate / 1000).toFixed(r.sampleRate % 1000 ? 1 : 0)} kHz`);
+    if (info.bitDepth) facts.push(`${info.bitDepth}-bit${info.encoding === 'float' ? ' float' : ''}`);
+    else if (info.format === 'mp3' || info.format === 'm4a') facts.push('lossy');
+    const ch = buffer.numberOfChannels;
+    facts.push(ch === 1 ? 'mono' : ch === 2 ? 'stereo' : `${ch} channels`);
+
+    const notes = [];
+    if (r.layout === 'dual-mono') notes.push('Both channels are identical (dual mono), so one of them was analysed.');
+    if (r.layout === 'left-only' || r.layout === 'right-only') {
+      const used = r.layout === 'left-only' ? 'left' : 'right';
+      const other = used === 'left' ? 'right' : 'left';
+      const quieter = r.layoutDetail.otherDb < -100 ? 'silent' : `${Math.round(-r.layoutDetail.otherDb)} dB quieter`;
+      notes.push(`Only the ${used} channel carries signal (the ${other} is ${quieter}), so the ${used} channel was analysed.`);
+    }
+    if (r.layout === 'sum') notes.push('The channels differ, so their mono sum was analysed. Clipping was checked on each channel.');
+    if (truncated) notes.push(`Only the first ${fmtDuration(Analysis.MAX_SECONDS)} were analysed.`);
+    if (resampled) {
+      notes.push(info.sampleRate
+        ? `The browser would not decode at the file’s ${info.sampleRate} Hz, so it was resampled to ${decodedAt} Hz. Levels are unaffected; the spectral values are approximate.`
+        : `The sample rate could not be read from the file header, so it was decoded at ${decodedAt} Hz. If that is not its native rate, the spectral values are approximate.`);
+    }
+    return `<span class="file-name">${esc(name)}</span>`
+      + facts.map((f) => `<span>${esc(f)}</span>`).join('')
+      + notes.map((n) => `<span class="file-note">${esc(n)}</span>`).join('');
+  }
+
+  function valueMarkup(value) {
+    const m = /^(\S+)\s(.+)$/.exec(value);
+    return m ? `${esc(m[1])}<span class="unit">${esc(m[2])}</span>` : esc(value);
+  }
+
+  function tileMarkup(item) {
+    return `<details class="tile status-${item.status}" id="item-${item.id}"><summary>`
+      + `<span class="tile-label">${esc(item.label)}</span>`
+      + `<span class="tile-value">${valueMarkup(item.value)}</span>`
+      + `<span class="tile-status"><span class="dot"></span>${esc(item.note)}</span>`
+      + `<span class="tile-target">${esc(item.target)}</span>`
+      + `</summary>${bodyMarkup(item)}</details>`;
+  }
+
+  function itemMarkup(item) {
+    const status = item.status === 'info' ? '' : Report.STATUS_LABEL[item.status];
+    const note = [status, item.note].filter((s, i, all) => s && all.indexOf(s) === i).join(' · ');
+    return `<details class="item status-${item.status}" id="item-${item.id}"><summary>`
+      + `<span class="dot"></span><span class="item-label">${esc(item.label)}</span>`
+      + `<span class="item-value">${esc(item.value)}</span><span class="chevron"></span>`
+      + `<span class="item-meta"><span class="item-note">${esc(note)}</span><span class="item-target">${esc(item.target)}</span></span>`
+      + `</summary>${bodyMarkup(item)}</details>`;
+  }
+
+  function bodyMarkup(item) {
+    let html = '<div class="item-body">';
+    html += item.explanation.map((p) => `<p><strong>${esc(p.lead)}</strong> ${esc(p.text)}</p>`).join('');
+    if (item.events && item.events.length) {
+      const more = item.eventsTotal > item.events.length ? ` (${item.events.length} of ${item.eventsTotal})` : '';
+      html += `<div class="events"><div class="events-title">${esc(item.eventsTitle || 'Where')}${more} · click to listen</div><ul>`
+        + item.events.map((e) => `<li><button type="button" class="stamp" data-t="${e.t}">${Report.fmtTime(e.t)}<span class="stamp-label">${esc(e.label)}</span></button></li>`).join('')
+        + '</ul></div>';
+    }
+    if (item.chart && item.chart.type === 'bands') html += bandsMarkup(item.chart.bands);
+    if (item.chart && item.chart.type === 'pitch') html += pitchChartMarkup(item.chart);
+    return `${html}</div>`;
+  }
+
+  function summaryMarkup(summary) {
+    return '<h2>What to do</h2>'
+      + `<p class="summary-intro">${esc(summary.intro)}</p>`
+      + (summary.actions.length
+        ? `<ol class="actions">${summary.actions.map((a) => `<li><strong>${esc(a.title)}</strong>${esc(a.text)}</li>`).join('')}</ol>`
+        : '')
+      + `<p class="summary-note">${esc(summary.note)}</p>`;
+  }
+
+  const kHz = (hz) => (hz >= 1000 ? `${hz / 1000}k` : String(hz));
+
+  function bandsMarkup(bands) {
+    const max = Math.max(1, Math.max.apply(null, bands.map((b) => b.percent)));
+    return `<div class="bands" role="img" aria-label="Share of energy per frequency band">${bands.map((b) => {
+      const h = ((b.percent / max) * 100).toFixed(1);
+      return `<div class="band" title="${kHz(b.lo)}–${kHz(b.hi)} Hz: ${b.percent.toFixed(1)} %, ${esc(Report.fmtDb(b.db))} RMS">`
+        + `<div class="band-track"><span class="band-value" style="bottom:calc(${h}% + 4px)">${b.percent.toFixed(0)} %</span>`
+        + `<div class="band-bar" style="height:${h}%"></div></div>`
+        + `<div class="band-label">${kHz(b.lo)}–${kHz(b.hi)}</div></div>`;
+    }).join('')}</div>`;
+  }
+
+  // f0 over time on a semitone axis; unvoiced frames leave gaps.
+  function pitchChartMarkup(chart) {
+    const W = 800;
+    const H = 170;
+    const left = 34;
+    const bottom = 18;
+    const top = 8;
+    const { track, hopSeconds } = chart;
+    const frames = track.length;
+    const lowMidi = Math.floor(Pitch.freqToMidi(chart.lowHz, 440)) - 2;
+    const highMidi = Math.ceil(Pitch.freqToMidi(chart.highHz, 440)) + 2;
+    const span = Math.max(1, highMidi - lowMidi);
+    const y = (midi) => top + ((highMidi - midi) / span) * (H - top - bottom);
+
+    // Gridlines: every natural note for a narrow range, C and G for a wider one, only C beyond that.
+    const NATURALS = [0, 2, 4, 5, 7, 9, 11];
+    const onGrid = (m) => {
+      const pc = ((m % 12) + 12) % 12;
+      return span <= 14 ? NATURALS.includes(pc) : span <= 30 ? pc === 0 || pc === 7 : pc === 0;
+    };
+    let grid = '';
+    for (let m = lowMidi; m <= highMidi; m++) {
+      if (!onGrid(m)) continue;
+      grid += `<line class="grid" x1="${left}" x2="${W}" y1="${y(m).toFixed(1)}" y2="${y(m).toFixed(1)}"/>`
+        + `<text class="grid-label" x="${left - 6}" y="${(y(m) + 4).toFixed(1)}" text-anchor="end">${esc(noteLabel(m))}</text>`;
+    }
+
+    // At most ~1000 points: each bucket shows the median of its voiced frames.
+    const bucket = Math.max(1, Math.ceil(frames / 1000));
+    let path = '';
+    let pen = false;
+    for (let f = 0; f < frames; f += bucket) {
+      const voiced = [];
+      for (let k = f; k < Math.min(frames, f + bucket); k++) if (track[k] > 0) voiced.push(track[k]);
+      if (!voiced.length) { pen = false; continue; }
+      voiced.sort((a, b) => a - b);
+      const hz = voiced[voiced.length >> 1];
+      const midi = Pitch.freqToMidi(hz, 440);
+      if (midi < lowMidi || midi > highMidi) { pen = false; continue; }
+      const px = (left + ((f + bucket / 2) / frames) * (W - left)).toFixed(1);
+      const py = y(midi).toFixed(1);
+      path += `${pen ? 'L' : 'M'}${px} ${py}`;
+      pen = true;
+    }
+
+    const total = frames * hopSeconds;
+    return `<svg class="pitch-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Pitch over time">${grid}`
+      + `<path class="trace" d="${path}"/>`
+      + `<text class="axis-label" x="${left}" y="${H - 2}">0:00</text>`
+      + `<text class="axis-label" x="${W}" y="${H - 2}" text-anchor="end">${fmtDuration(total)}</text></svg>`;
+  }
+
+  // ------------------------------------------------------------------ player
+
+  function stopPlayback() {
+    if (player.source) {
+      try { player.source.stop(); } catch { /* already ended */ }
+      player.source.disconnect();
+      player.source = null;
+    }
+    if (player.button) {
+      player.button.classList.remove('playing');
+      player.button = null;
+    }
+  }
+
+  // Play a short excerpt starting just before a timestamp; clicking the same
+  // stamp again stops it.
+  function playAt(t, button) {
+    const again = player.button === button;
+    stopPlayback();
+    if (again || !analysis.buffer) return;
+    const ctx = audioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const source = ctx.createBufferSource();
+    source.buffer = analysis.buffer;
+    source.connect(ctx.destination);
+    const start = Math.max(0, t - PLAY_LEAD_S);
+    const duration = Math.min(PLAY_LENGTH_S, analysis.buffer.duration - start);
+    source.onended = () => { if (player.source === source) stopPlayback(); };
+    source.start(0, start, duration);
+    player.source = source;
+    player.button = button;
+    button.classList.add('playing');
   }
 
   // ------------------------------------------------------------------- setup
@@ -605,6 +986,49 @@
     ui.tempoReset.addEventListener('click', () => {
       resetTempo();
       ui.tempoReset.blur();
+    });
+
+    ui.browse.addEventListener('click', () => ui.file.click());
+    ui.dropzone.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      ui.file.click();
+    });
+    ui.file.addEventListener('change', () => {
+      if (ui.file.files && ui.file.files[0]) analyseFile(ui.file.files[0]);
+    });
+    ui.analysisNew.addEventListener('click', () => {
+      resetAnalysis();
+      ui.analysisNew.blur();
+    });
+    ui.report.addEventListener('click', (e) => {
+      const stamp = e.target.closest('.stamp');
+      if (stamp) playAt(Number(stamp.dataset.t), stamp);
+    });
+
+    // Files can be dropped anywhere on the page while in analysis mode.
+    const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+    let dragDepth = 0;
+    document.addEventListener('dragenter', (e) => {
+      if (settings.mode !== 'analysis' || !hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      ui.app.classList.add('dragging');
+    });
+    document.addEventListener('dragover', (e) => {
+      if (settings.mode !== 'analysis' || !hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('dragleave', () => {
+      if (dragDepth > 0 && --dragDepth === 0) ui.app.classList.remove('dragging');
+    });
+    document.addEventListener('drop', (e) => {
+      if (settings.mode !== 'analysis') return;
+      e.preventDefault();
+      dragDepth = 0;
+      ui.app.classList.remove('dragging');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) analyseFile(file);
     });
 
     ui.device.addEventListener('change', async () => {
