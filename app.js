@@ -22,6 +22,11 @@
  * Analysis mode takes a dropped file: header sniffed for the native sample
  * rate → decodeAudioData in an offline context at that rate → channels handed
  * to analysis-worker.js → Report.build() → cards, timestamps and a summary.
+ *
+ * Sound lab plays up to eight tones at once: one oscillator and gain per tone
+ * into a master gain, levels scaled so the sum never clips. Tones.js names
+ * what they make (note, interval or chord) and draws the waveform; the
+ * arpeggio schedules its notes on the audio clock like the metronome.
  */
 (function () {
   'use strict';
@@ -38,7 +43,7 @@
   const MAX_FILE_BYTES = 300 * 1024 * 1024;  // decodeAudioData holds the whole file in memory
   const PLAY_LEAD_S = 0.5;        // an excerpt starts this long before its timestamp…
   const PLAY_LENGTH_S = 3;        // …and lasts this long
-  const MODES = ['tuner', 'tempo', 'record', 'analysis'];
+  const MODES = ['tuner', 'tempo', 'record', 'analysis', 'lab'];
   const INPUT_MODES = ['tuner', 'record'];   // the modes that listen to the interface
   const MAX_TAKE_S = 600;
   const MIN_TAKE_S = 0.2;
@@ -49,11 +54,28 @@
   const THEMES = ['auto', 'light', 'dark'];
   const STORAGE_KEY = 'tuner.settings';
 
-  // Reference tone: a mellow periodic wave whose overtones still carry on
-  // small speakers, where a low E's fundamental alone would be inaudible.
-  const TONE_HARMONICS = [0, 1, 0.5, 0.3, 0.18, 0.1, 0.06];
+  // Reference tone: the soft sound (Tones.SOFT_HARMONICS), whose overtones
+  // still carry on small speakers, where a low E's fundamental alone would be inaudible.
   const TONE_LEVEL = 0.25;
   const TONE_FADE_S = 0.03;
+
+  // Sound lab: the tones' level. Every sound is trimmed to the same loudness
+  // (Instruments' gain), and the tones' levels are scaled to add up to at most 1.
+  const LAB_LEVEL = 1;
+  const LAB_FADE_S = 0.03;
+  const LAB_GLIDE_S = 0.008;      // time constant for frequency and level changes while playing
+  const ARP_STEP_S = 0.45;        // the arpeggio plays each tone this long…
+  const ARP_HOLD_S = 1.8;         // …then all of them together this long
+  const LAB_MESSAGE_MS = 3500;
+  const LAB_SAVE_MS = 400;
+  const KEYS_OCTAVES = 3;         // the keyboard shows three octaves and the next C
+  const SCOPE_W = 800;
+  const SCOPE_H = 120;
+  const SCOPE_COLUMNS = 400;
+  const LAB_HINT = 'Click keys to add or remove notes · the space bar plays and stops';
+  const LOOP_HINT = 'Drag chords into the loop or click them to add them · drag blocks to reorder them, click one to hear it';
+  const EXPORT_RATE = 48000;
+  const SOUND_IDS = Instruments.PRESETS.map((p) => p.id);
 
   // Metronome voices: pitch in Hz and peak level.
   const CLICK_SOUNDS = {
@@ -149,16 +171,90 @@
     headline: $('headline'),
     items: $('items'),
     summary: $('summary'),
+    wave: $('wave'),
+    volume: $('volume'),
+    labClear: $('lab-clear'),
+    labName: $('lab-name'),
+    labDetail: $('lab-detail'),
+    labSong: $('lab-song'),
+    labPlay: $('lab-play'),
+    labPlayLabel: $('lab-play-label'),
+    labArp: $('lab-arp'),
+    scope: $('scope'),
+    scopeSpan: $('scope-span'),
+    keys: $('keys'),
+    keysDown: $('keys-down'),
+    keysUp: $('keys-up'),
+    labHint: $('lab-hint'),
+    voiceCount: $('voice-count'),
+    voiceList: $('voice-list'),
+    voicesEmpty: $('voices-empty'),
+    voiceAdd: $('voice-add'),
+    semiDown: $('semi-down'),
+    semiUp: $('semi-up'),
+    octDown: $('oct-down'),
+    octUp: $('oct-up'),
+    roots: $('roots'),
+    libOctave: $('lib-octave'),
+    libOctaveDown: $('lib-octave-down'),
+    libOctaveUp: $('lib-octave-up'),
+    libGroups: $('lib-groups'),
+    explain: $('explain'),
+    explainTitle: $('explain-title'),
+    explainText: $('explain-text'),
+    explainSong: $('explain-song'),
+    songList: $('song-list'),
+    songSave: $('song-save'),
+    songDialog: $('song-dialog'),
+    songDialogTitle: $('song-dialog-title'),
+    songForm: $('song-form'),
+    songName: $('song-name'),
+    songDelete: $('song-delete'),
+    songCancel: $('song-cancel'),
+    songSaveNew: $('song-save-new'),
+    keyTonic: $('key-tonic'),
+    keyMode: $('key-mode'),
+    keySevenths: $('key-sevenths'),
+    progStart: $('prog-start'),
+    palette: $('palette'),
+    timeline: $('timeline'),
+    timelineHint: $('timeline-hint'),
+    loopPlay: $('loop-play'),
+    loopPlayLabel: $('loop-play-label'),
+    loopBpm: $('loop-bpm'),
+    loopBpmDown: $('loop-bpm-down'),
+    loopBpmUp: $('loop-bpm-up'),
+    loopLength: $('loop-length'),
+    blockAdd: $('block-add'),
+    loopUndo: $('loop-undo'),
+    loopClear: $('loop-clear'),
+    chordsSound: $('chords-sound'),
+    chordsStyle: $('chords-style'),
+    chordsVoicing: $('chords-voicing'),
+    bassSound: $('bass-sound'),
+    bassPattern: $('bass-pattern'),
+    drumsPattern: $('drums-pattern'),
+    partToggles: {
+      chords: document.querySelector('.voice-on[data-part="chords"]'),
+      bass: document.querySelector('.voice-on[data-part="bass"]'),
+      drums: document.querySelector('.voice-on[data-part="drums"]'),
+    },
+    partVolumes: { chords: $('chords-volume'), bass: $('bass-volume'), drums: $('drums-volume') },
+    exportRepeats: $('export-repeats'),
+    exportWav: $('export-wav'),
+    exportStems: $('export-stems'),
+    exportMidi: $('export-midi'),
+    exportStatus: $('export-status'),
   };
 
   const settings = loadSettings();
   let tunings = collectTunings();
   const audio = {
     ctx: null, stream: null, nodes: [], analyser: null, buffer: null, detector: null, channels: 1,
-    capture: null, captureReady: false, workletLoad: null,
+    capture: null, captureReady: false, workletLoad: null, softWave: null,
   };
   const tapTempo = Tempo.createTapTempo();
-  const tone = { on: false, osc: null, gain: null, string: -1, wave: null };
+  const tone = { on: false, osc: null, gain: null, string: -1 };
   // queue: scheduled beats not yet heard; beat: the one heard last.
   const metro = { clock: Metronome.createClock(clickOptions()), timer: 0, out: null, queue: [], beat: null, countIn: 0 };
   const analysis = { worker: null, buffer: null, file: null, token: 0 };
@@ -167,6 +263,22 @@
   const rec = {
     meter: Recorder.createMeter(), capturing: null, stopping: false, chunks: [], frames: 0, startedAt: 0,
     takes: [], nextTake: 1, rows: [], noiseTimer: 0, noisePeakDb: -Infinity,
+  };
+  // voices: settings.lab.voices with an id each. nodes: voice id → { osc, gain, freq } while playing.
+  // preset: what was last loaded from the library; edited: the tones have been changed since.
+  const lab = {
+    voices: settings.lab.voices.map((v, i) => Object.assign({ id: i + 1 }, v)),
+    nextId: settings.lab.voices.length + 1,
+    playing: false, out: null, nodes: new Map(), arp: null,
+    preset: null, edited: false, rows: new Map(), keyEls: [], chipEls: [], messageTimer: 0, saveTimer: 0,
+    scopeAt: 0, scopeData: null,
+  };
+  // The chord loop while it plays: arrangement (Song.arrange), anchor (audio time of beat 0), until (scheduled
+  // up to), cycle and next (the next event), block (the one being heard), keys (its notes, lit on the keyboard).
+  const prog = {
+    playing: false, timer: 0, buses: null, arrangement: null, anchor: 0, until: 0, cycle: 0, next: 0,
+    block: -1, keys: null, blockEls: [], selected: -1, history: [], drag: null, justDragged: false,
+    exporting: false, messageTimer: 0, saveTimer: 0,
   };
 
   let running = false;
@@ -203,6 +315,10 @@
     s.customTunings = Array.isArray(s.customTunings)
       ? s.customTunings.filter((t) => t && isText(t.id) && isText(t.name) && isText(t.strings))
       : [];
+    s.lab = Tones.normaliseState(s.lab, SOUND_IDS);
+    s.loop = Song.normaliseLoop(s.loop, SOUND_IDS);
+    s.songs = Song.normaliseSongs(s.songs, SOUND_IDS);
+    if (!s.songs.some((song) => song.id === s.songId)) s.songId = '';
     return s;
   }
 
@@ -507,6 +623,9 @@
       renderRing(now);
     } else if (settings.mode === 'record' && running) {
       renderRecord(now);
+    } else if (settings.mode === 'lab') {
+      if (prog.playing) renderPlayhead();
+      drawLiveScope(now);
     }
     requestAnimationFrame(frame);
   }
@@ -840,13 +959,10 @@
     stopTone();
     const ctx = audioContext();
     if (ctx.state === 'suspended') ctx.resume();
-    if (!tone.wave) {
-      tone.wave = ctx.createPeriodicWave(new Float32Array(TONE_HARMONICS.length), Float32Array.from(TONE_HARMONICS));
-    }
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     const t = ctx.currentTime;
-    osc.setPeriodicWave(tone.wave);
+    osc.setPeriodicWave(softWave());
     osc.frequency.value = toneFrequency(i);
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(TONE_LEVEL, t + TONE_FADE_S);
@@ -875,6 +991,15 @@
     if (tone.osc) tone.osc.frequency.setTargetAtTime(toneFrequency(tone.string), audio.ctx.currentTime, 0.01);
   }
 
+  // The soft sound, shared by the reference tone and Sound lab.
+  function softWave() {
+    if (!audio.softWave) {
+      const h = Tones.SOFT_HARMONICS;
+      audio.softWave = audioContext().createPeriodicWave(new Float32Array(h.length), Float32Array.from(h));
+    }
+    return audio.softWave;
+  }
+
   // -------------------------------------------------------------------- theme
 
   function applyTheme() {
@@ -895,6 +1020,11 @@
     if (settings.mode !== 'tempo') stopClick();
     if (settings.mode !== 'tuner') stopTone();
     if (settings.mode !== 'record' && rec.capturing) stopCapture();
+    if (settings.mode !== 'lab') {
+      stopLab();
+      stopArpeggio();
+      stopLoop();
+    }
     ui.segs.forEach((b) => {
       const active = b.dataset.mode === settings.mode;
       b.classList.toggle('active', active);
@@ -1415,14 +1545,7 @@
   function downloadTake(take) {
     const d = take.recordedAt;
     const wav = Recorder.encodeWav(take.channels, take.sampleRate, 24);
-    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${take.name} ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}-${pad2(d.getMinutes())}.wav`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    download(wav, 'audio/wav', `${take.name} ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}-${pad2(d.getMinutes())}.wav`);
   }
 
   // Hands the take to Analysis mode, as if it had been dropped there.
@@ -1539,6 +1662,1283 @@
     playBuffer(takeBuffer(take), button, 0, take.duration);
   }
 
+  // --------------------------------------------------------------- sound lab
+
+  const BLACK_KEYS = [1, 3, 6, 8, 10];
+  const pitchClass = (midi) => ((midi % 12) + 12) % 12;
+  const exactMidi = (freq) => Pitch.freqToMidi(freq, settings.a4);
+  const nearestMidi = (freq) => Math.round(exactMidi(freq));
+  const fmtHz = (freq) => fmtNumber(freq, freq < 1000 ? 2 : 1);
+  const soundingVoices = () => lab.voices.filter((v) => v.on).sort((a, b) => a.freq - b.freq);
+  const voiceById = (id) => lab.voices.find((v) => v.id === id);
+  const isWave = (id) => Instruments.byId(id).engine === 'wave';
+  // Volume sliders are squared, so their middle sounds like the middle.
+  const monitorLevel = () => settings.lab.volume * settings.lab.volume;
+  const partLevel = (volume) => volume * volume;
+
+  function centsText(cents) {
+    const r = Math.round(cents);
+    return `${r > 0 ? '+' : r < 0 ? '−' : ''}${Math.abs(r)} ¢`;
+  }
+
+  // From wherever a level is now down to silence, even halfway through a change.
+  function fadeOut(param, t) {
+    if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(t);
+    else param.cancelScheduledValues(t);
+    param.setTargetAtTime(0, t, LAB_FADE_S / 3);
+  }
+
+  // Sound lab's mix on the page's context: the tones, the loop's parts and the
+  // previews, each with a reverb send, into a limiter, then the Volume slider.
+  // Exports render their own mix, so the slider never changes a file.
+  function labMixer() {
+    if (!audio.mixer) {
+      const ctx = audioContext();
+      audio.monitor = ctx.createGain();
+      audio.monitor.gain.value = monitorLevel();
+      audio.monitor.connect(ctx.destination);
+      audio.mixer = Instruments.createMixer(ctx, audio.monitor);
+      audio.mixer.part('drums').send.gain.value = 0.08;
+      // The live waveform listens after the limiter; a muted sink keeps the analyser running in every browser.
+      audio.scope = ctx.createAnalyser();
+      audio.scope.fftSize = 4096;
+      const sink = ctx.createGain();
+      sink.gain.value = 0;
+      audio.mixer.output.connect(audio.scope);
+      audio.scope.connect(sink);
+      sink.connect(ctx.destination);
+      audio.mixer.setSound('tones', settings.lab.sound);
+      applyPartLevels();
+    }
+    return audio.mixer;
+  }
+
+  function startLab() {
+    if (lab.playing || !lab.voices.length) return;
+    stopArpeggio();
+    const ctx = audioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const t = ctx.currentTime;
+    lab.out = ctx.createGain();
+    lab.out.gain.setValueAtTime(0, t);
+    lab.out.gain.setTargetAtTime(LAB_LEVEL, t, LAB_FADE_S / 3);
+    lab.out.connect(labMixer().part('tones').input);
+    lab.playing = true;
+    syncLab();
+    renderLabPlaying();
+  }
+
+  function stopLab() {
+    if (!lab.playing) return;
+    const t = audio.ctx.currentTime;
+    const out = lab.out;
+    fadeOut(out.gain, t);
+    lab.nodes.forEach((n) => n.voice.stop(t + LAB_FADE_S * 3));
+    setTimeout(() => out.disconnect(), LAB_FADE_S * 3000 + 100);
+    Object.assign(lab, { playing: false, out: null, nodes: new Map() });
+    renderLabPlaying();
+  }
+
+  // A tone's note ends (its release plays out), so the next sync strikes it afresh.
+  function dropVoiceNode(id, t) {
+    const n = lab.nodes.get(id);
+    if (!n) return;
+    n.voice.stop(t);
+    setTimeout(() => n.level.disconnect(), 5000);   // after the longest release
+    lab.nodes.delete(id);
+  }
+
+  // Brings the notes in line with the tones: new ones are struck, removed ones
+  // released, changed ones glide. Each tone has its own level, scaled so that
+  // the tones together never go past full scale (Tones.mixSample, which draws
+  // the plain waves, does the same).
+  function syncLab() {
+    if (!lab.playing) return;
+    const ctx = audio.ctx;
+    const t = ctx.currentTime;
+    const scale = 1 / Math.max(1, lab.voices.reduce((s, v) => s + (v.on ? v.gain : 0), 0));
+    const ids = new Set(lab.voices.map((v) => v.id));
+    Array.from(lab.nodes.keys()).forEach((id) => { if (!ids.has(id)) dropVoiceNode(id, t); });
+    lab.voices.forEach((v) => {
+      let n = lab.nodes.get(v.id);
+      if (!n) {
+        const level = ctx.createGain();
+        level.gain.value = 0;
+        level.connect(lab.out);
+        n = { level, voice: Instruments.playNote(ctx, level, settings.lab.sound, v.freq, t, Infinity, 1), freq: v.freq };
+        lab.nodes.set(v.id, n);
+      } else if (n.freq !== v.freq) {
+        n.voice.setFreq(v.freq, t);
+        n.freq = v.freq;
+      }
+      n.level.gain.setTargetAtTime(v.on ? v.gain * scale : 0, t, LAB_GLIDE_S);
+    });
+  }
+
+  // Strikes every sounding tone again: after a change of sound, or to hear a
+  // piano or guitar again once it has died away.
+  function restrikeLab() {
+    if (!lab.playing) return;
+    const t = audio.ctx.currentTime;
+    Array.from(lab.nodes.keys()).forEach((id) => dropVoiceNode(id, t));
+    syncLab();
+  }
+
+  // Each sounding tone on its own, lowest first, then all of them together.
+  // The notes are scheduled on the audio clock; timers only light the keys along.
+  function playArpeggio() {
+    const voices = soundingVoices();
+    if (voices.length < 2) return;
+    stopLab();
+    stopArpeggio();
+    const ctx = audioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const out = ctx.createGain();
+    out.gain.value = LAB_LEVEL;
+    out.connect(labMixer().part('tones').input);
+    const t0 = ctx.currentTime + 0.05;
+    const together = t0 + voices.length * ARP_STEP_S;
+    const end = together + ARP_HOLD_S;
+    const scale = 1 / Math.max(1, voices.reduce((s, v) => s + v.gain, 0));
+    voices.forEach((v, i) => {
+      Instruments.playNote(ctx, out, settings.lab.sound, v.freq, t0 + i * ARP_STEP_S, ARP_STEP_S * 0.9, v.gain);
+      Instruments.playNote(ctx, out, settings.lab.sound, v.freq, together, ARP_HOLD_S - 0.4, v.gain * scale);
+    });
+    const arp = { out, ids: voices.map((v) => v.id), index: -1, timers: [] };
+    const at = (time, fn) => arp.timers.push(setTimeout(fn, Math.max(0, (time - ctx.currentTime) * 1000)));
+    voices.forEach((v, i) => at(t0 + i * ARP_STEP_S, () => { arp.index = i; renderLab(); }));
+    at(together, () => { arp.index = voices.length; renderLab(); });
+    at(end + 0.3, stopArpeggio);
+    lab.arp = arp;
+    renderLabPlaying();
+  }
+
+  function stopArpeggio() {
+    const arp = lab.arp;
+    if (!arp) return;
+    arp.timers.forEach(clearTimeout);
+    lab.arp = null;
+    fadeOut(arp.out.gain, audio.ctx.currentTime);
+    setTimeout(() => arp.out.disconnect(), LAB_FADE_S * 3000 + 100);
+    renderLab();
+  }
+
+  // The voice ids the arpeggio is sounding right now.
+  function arpSounding() {
+    const arp = lab.arp;
+    if (!arp || arp.index < 0) return [];
+    return arp.index >= arp.ids.length ? arp.ids : [arp.ids[arp.index]];
+  }
+
+  // ---- what the tones make
+
+  // The sounding tones as a note, an interval or a chord, with the spelling
+  // their note names should follow (per pitch class; gaps take Tones.NAMES).
+  function labAnalysis() {
+    const voices = soundingVoices();
+    const midis = voices.map((v) => nearestMidi(v.freq));
+    const a = { voices, midis, interval: null, pair: null, chord: null, names: new Array(12) };
+    if (voices.length > 2) {
+      a.chord = Tones.identifyChord(midis);
+      if (a.chord) a.names = a.chord.names;
+    }
+    // Two tones, or more on just two notes (a doubled interval): the interval between the lowest of each.
+    const other = midis.findIndex((m) => pitchClass(m) !== pitchClass(midis[0]));
+    const twoNotes = other > 0 && midis.every((m) => pitchClass(m) === pitchClass(midis[0]) || pitchClass(m) === pitchClass(midis[other]));
+    if (!a.chord && (voices.length === 2 || twoNotes)) {
+      a.pair = [0, voices.length === 2 ? 1 : other];
+      a.interval = Tones.describeInterval(voices[0].freq, voices[a.pair[1]].freq);
+      const [low, high] = Tones.spellInterval(midis[0], midis[a.pair[1]]);
+      a.names[pitchClass(midis[0])] = low;
+      a.names[pitchClass(midis[a.pair[1]])] = high;
+    }
+    return a;
+  }
+
+  const labNoteName = (midi, names) => names[pitchClass(midi)] || Tones.NAMES[pitchClass(midi)];
+  const labOctave = (midi, names) => Tones.writtenOctave(labNoteName(midi, names), midi);
+  const labNoteLabel = (midi, names) => labNoteName(midi, names) + labOctave(midi, names);
+  // A note for the big readout or a row: accidental raised, octave smaller.
+  const labNoteMarkup = (midi, names, octaveClass) => `${noteMarkup(labNoteName(midi, names))}<span class="${octaveClass}">${labOctave(midi, names)}</span>`;
+
+  function renderLab() {
+    const a = labAnalysis();
+    renderLabDisplay(a);
+    renderVoiceRows(a);
+    renderKeys(a);
+    renderLibraryState();
+    renderLabPlaying();   // and the waveform
+  }
+
+  function renderLabDisplay(a) {
+    const { voices, midis, names } = a;
+    const pcs = Array.from(new Set(midis.map(pitchClass)));
+    let big = '—';
+    let words = false;
+    let detail;
+    let song = '';
+    if (!voices.length) {
+      detail = lab.voices.length ? 'Every tone is switched off' : 'Add a tone, click a key or pick a chord';
+    } else if (voices.length === 1) {
+      big = labNoteMarkup(midis[0], names, 'chord-oct');
+      detail = `${fmtHz(voices[0].freq)} Hz · ${centsText((exactMidi(voices[0].freq) - midis[0]) * 100)}`;
+    } else if (a.interval) {
+      const iv = a.interval;
+      big = esc(iv.name);
+      words = true;
+      const [i, j] = a.pair;
+      const parts = [`${labNoteLabel(midis[i], names)} + ${labNoteLabel(midis[j], names)}`];
+      if (iv.semitones === 0) parts.push(`${fmtHz(voices[j].freq - voices[i].freq)} Hz apart`);
+      else parts.push(`${iv.semitones} semitone${iv.semitones === 1 ? '' : 's'}`);
+      if (iv.ratio && iv.semitones > 0) {
+        const off = Math.round(iv.offPure);
+        parts.push(off === 0 ? `a pure ${iv.ratio}` : `${Math.abs(off)} ¢ ${off < 0 ? 'narrower' : 'wider'} than a pure ${iv.ratio}`);
+      }
+      detail = parts.join(' · ');
+      if (iv.song) song = `Think of ${iv.song}`;
+    } else if (a.chord) {
+      const c = a.chord;
+      big = noteMarkup(c.rootName)
+        + (c.suffix ? `<span class="chord-suffix">${esc(c.suffix)}</span>` : '')
+        + (c.bass ? `<span class="chord-bass">/${esc(c.bass)}</span>` : '');
+      detail = `${c.name}${c.inversion ? `, ${c.inversion}` : ''} · ${c.notes.join(' ')}`;
+    } else if (pcs.length === 1) {
+      const same = midis.every((m) => m === midis[0]);
+      big = same ? labNoteMarkup(midis[0], names, 'chord-oct') : noteMarkup(labNoteName(midis[0], names));
+      detail = same ? `${voices.length} tones on ${labNoteLabel(midis[0], names)}` : `${labNoteName(midis[0], names)} in ${new Set(midis).size} octaves`;
+    } else {
+      big = esc(pcs.map((pc) => labNoteName(pc, names)).join(' '));
+      words = true;
+      detail = 'No common chord name';
+    }
+    const beat = fmtNumber(Tones.beatRate(voices.map((v) => v.freq)), 1);
+    if (beat !== '0') detail += ` · beating ${beat === '1' ? 'once' : `${beat} times`} a second`;
+    ui.labName.innerHTML = big;
+    ui.labName.classList.toggle('words', words);
+    ui.labName.classList.toggle('empty', !voices.length);
+    setText(ui.labDetail, detail);
+    setText(ui.labSong, song);
+  }
+
+  // What each tone is: its role in the chord, or its interval above the lowest tone.
+  function voiceRole(v, midi, a) {
+    if (!v.on) return 'Off';
+    if (a.chord) return a.chord.roles[pitchClass(midi)] || '';
+    if (a.voices.length < 2) return '';
+    return v === a.voices[0] ? 'Lowest' : Tones.describeInterval(a.voices[0].freq, v.freq).name;
+  }
+
+  // The waveform shows what is playing, live, while an instrument or the loop
+  // sounds; otherwise the plain waves' sum is drawn from their maths, which
+  // also works in silence and shows beating as a swelling outline.
+  const scopeLive = () => ((lab.playing || !!lab.arp) && !isWave(settings.lab.sound)) || prog.playing;
+
+  // Four cycles of the lowest tone, or two beats when tones beat, so the swelling shows.
+  function renderScope(voices) {
+    const mid = SCOPE_H / 2;
+    const amp = mid - 8;
+    const y = (value) => (mid - value * amp).toFixed(1);
+    let html = `<line class="axis" x1="0" x2="${SCOPE_W}" y1="${mid}" y2="${mid}"/>`;
+    let span = '';
+    if (voices.length && !isWave(settings.lab.sound)) {
+      span = 'shown while playing';
+    } else if (voices.length) {
+      const freqs = voices.map((v) => v.freq);
+      const beat = Tones.beatRate(freqs);
+      const seconds = beat ? Math.min(2 / beat, 2) : clamp(4 / freqs[0], 0.002, 0.1);
+      const wave = settings.lab.sound;
+      const cycles = freqs[freqs.length - 1] * seconds;
+      if (cycles * 12 <= 4000) {
+        const points = Math.max(SCOPE_COLUMNS, Math.ceil(cycles * 12));
+        let d = '';
+        for (let i = 0; i <= points; i++) {
+          d += `${i ? 'L' : 'M'}${((i / points) * SCOPE_W).toFixed(1)} ${y(Tones.mixSample(voices, wave, (i / points) * seconds))}`;
+        }
+        html += `<path class="trace" d="${d}"/>`;
+      } else {
+        // Too many cycles to draw one by one: each column's highs and lows, like a DAW's waveform.
+        const SUB = 24;
+        const top = [];
+        const bottom = [];
+        for (let c = 0; c < SCOPE_COLUMNS; c++) {
+          let lo = Infinity;
+          let hi = -Infinity;
+          for (let s = 0; s <= SUB; s++) {
+            const value = Tones.mixSample(voices, wave, ((c + s / SUB) / SCOPE_COLUMNS) * seconds);
+            if (value < lo) lo = value;
+            if (value > hi) hi = value;
+          }
+          const x = (((c + 0.5) / SCOPE_COLUMNS) * SCOPE_W).toFixed(1);
+          top.push(`${x} ${y(hi)}`);
+          bottom.unshift(`${x} ${y(lo)}`);
+        }
+        html += `<path class="envelope" d="M${top.join('L')}L${bottom.join('L')}Z"/>`;
+      }
+      span = seconds < 0.1 ? `${fmtNumber(seconds * 1000, 1)} ms` : `${fmtNumber(seconds, 2)} s`;
+    }
+    ui.scope.innerHTML = html;
+    ui.scope.setAttribute('aria-label', span ? `Waveform of the tones together over ${span}` : 'Waveform: silence');
+    setText(ui.scopeSpan, span);
+  }
+
+  // What comes out of the mix, from a rising zero crossing so the picture stands still. About 30 times a second.
+  function drawLiveScope(now) {
+    if (!scopeLive() || !audio.scope || now - lab.scopeAt < 33) return;
+    lab.scopeAt = now;
+    const data = lab.scopeData || (lab.scopeData = new Float32Array(audio.scope.fftSize));
+    audio.scope.getFloatTimeDomainData(data);
+    const span = data.length >> 1;
+    let start = 0;
+    for (let i = 1; i < span; i++) {
+      if (data[i - 1] < 0 && data[i] >= 0) {
+        start = i;
+        break;
+      }
+    }
+    const mid = SCOPE_H / 2;
+    const amp = mid - 8;
+    let d = '';
+    for (let k = 0; k <= SCOPE_COLUMNS * 2; k++) {
+      const v = clamp(data[start + Math.floor((k / (SCOPE_COLUMNS * 2)) * (span - 1))] * 1.6, -1, 1);
+      d += `${k ? 'L' : 'M'}${((k / (SCOPE_COLUMNS * 2)) * SCOPE_W).toFixed(1)} ${(mid - v * amp).toFixed(1)}`;
+    }
+    ui.scope.innerHTML = `<line class="axis" x1="0" x2="${SCOPE_W}" y1="${mid}" y2="${mid}"/><path class="trace" d="${d}"/>`;
+    setText(ui.scopeSpan, `live · ${fmtNumber((span / audio.ctx.sampleRate) * 1000, 1)} ms`);
+  }
+
+  function renderLabPlaying() {
+    const arp = !!lab.arp;
+    ui.app.classList.toggle('lab-playing', lab.playing);
+    ui.app.classList.toggle('lab-arp', arp);
+    ui.labPlay.setAttribute('aria-pressed', String(lab.playing));
+    ui.labPlayLabel.textContent = lab.playing ? 'Stop' : 'Play';
+    ui.labPlay.disabled = !lab.playing && !lab.voices.length;
+    ui.labArp.setAttribute('aria-pressed', String(arp));
+    ui.labArp.disabled = !arp && lab.voices.filter((v) => v.on).length < 2;
+    if (!scopeLive()) renderScope(soundingVoices());
+  }
+
+  function showLabMessage(text) {
+    ui.labHint.textContent = text;
+    ui.labHint.classList.add('message');
+    clearTimeout(lab.messageTimer);
+    lab.messageTimer = setTimeout(() => {
+      ui.labHint.textContent = LAB_HINT;
+      ui.labHint.classList.remove('message');
+    }, LAB_MESSAGE_MS);
+  }
+
+  // The stored copy follows every change; writing it out waits for a pause, so a slider drag is one write.
+  function saveLabSoon() {
+    settings.lab.voices = lab.voices.map((v) => ({ freq: v.freq, gain: v.gain, on: v.on }));
+    clearTimeout(lab.saveTimer);
+    lab.saveTimer = setTimeout(saveSettings, LAB_SAVE_MS);
+  }
+
+  // ---- tones
+
+  // After tones are added, removed or replaced: lowest first, fresh rows.
+  function voicesChanged() {
+    lab.voices.sort((a, b) => a.freq - b.freq);
+    if (!lab.voices.length) {
+      stopLab();
+      stopArpeggio();
+    }
+    buildVoiceRows();
+    syncLab();
+    renderLab();
+    saveLabSoon();
+  }
+
+  // After a tone's frequency, level or on/off changed: the rows stay as they are.
+  function voiceEdited() {
+    syncLab();
+    renderLab();
+    saveLabSoon();
+  }
+
+  function newVoice(freq, gain, on) {
+    return { id: lab.nextId++, freq, gain: gain === undefined ? 1 : gain, on: on !== false };
+  }
+
+  function setVoiceFreq(v, freq) {
+    v.freq = clamp(freq, Tones.MIN_HZ, Tones.MAX_HZ);
+    lab.edited = true;
+    voiceEdited();
+  }
+
+  function stepVoice(v, dir) {
+    const freq = Tones.stepNote(v.freq, dir, settings.a4);
+    if (freq === null) showLabMessage('That would leave 20 Hz to 20 kHz, the range Sound lab plays');
+    else setVoiceFreq(v, freq);
+  }
+
+  // A typed frequency or note takes effect on Enter or leaving the field, which then shows the Hz.
+  function commitHz(v, input) {
+    const parsed = Tones.parseTone(input.value, settings.a4);
+    if (parsed.error) showLabMessage(parsed.error);
+    else if (parsed.hz !== v.freq) setVoiceFreq(v, parsed.hz);
+    input.value = fmtHz(v.freq);
+  }
+
+  // Arrow keys in a frequency: 1 Hz a press, 10 with Shift, from what is typed there.
+  function nudgeHz(v, input, step) {
+    const typed = Tones.parseTone(input.value, settings.a4);
+    const freq = Math.round(((typed.hz || v.freq) + step) * 100) / 100;
+    if (freq < Tones.MIN_HZ || freq > Tones.MAX_HZ) return;
+    setVoiceFreq(v, freq);
+    input.value = fmtHz(v.freq);
+  }
+
+  function removeVoice(v) {
+    lab.voices = lab.voices.filter((x) => x !== v);
+    lab.edited = true;
+    if (!lab.voices.length) lab.preset = null;
+    voicesChanged();
+  }
+
+  // A new tone a 5th above the highest, or A4 to start with.
+  function addTone() {
+    if (lab.voices.length >= Tones.MAX_VOICES) return;
+    const top = Math.max(0, ...lab.voices.map((v) => v.freq));
+    let freq = top ? top * Math.pow(2, 7 / 12) : Pitch.midiToFreq(69, settings.a4);
+    if (freq > Tones.MAX_HZ) freq = top / Math.pow(2, 5 / 12);
+    lab.voices.push(newVoice(freq));
+    lab.edited = true;
+    voicesChanged();
+    startLab();
+  }
+
+  function transpose(semis) {
+    const factor = Math.pow(2, semis / 12);
+    if (lab.voices.some((v) => v.freq * factor < Tones.MIN_HZ || v.freq * factor > Tones.MAX_HZ)) {
+      showLabMessage(`That would take a tone ${semis < 0 ? 'below 20 Hz' : 'above 20 kHz'}`);
+      return;
+    }
+    lab.voices.forEach((v) => { v.freq = Math.round(v.freq * factor * 1e6) / 1e6; });
+    lab.edited = true;
+    voiceEdited();
+  }
+
+  function clearLab() {
+    lab.voices = [];
+    lab.preset = null;
+    voicesChanged();
+  }
+
+  // A key adds its note, or takes it away again; a switched-off tone on that note is switched back on.
+  function toggleKey(midi) {
+    const here = lab.voices.filter((v) => nearestMidi(v.freq) === midi);
+    let sounds = true;
+    if (here.some((v) => v.on)) {
+      lab.voices = lab.voices.filter((v) => !here.includes(v));
+      sounds = false;
+    } else if (here.length) {
+      here.forEach((v) => { v.on = true; });
+    } else if (lab.voices.length >= Tones.MAX_VOICES) {
+      showLabMessage(`Up to ${Tones.MAX_VOICES} tones at once. Remove one first.`);
+      return;
+    } else {
+      lab.voices.push(newVoice(Pitch.midiToFreq(midi, settings.a4)));
+    }
+    lab.edited = true;
+    if (!lab.voices.length) lab.preset = null;
+    voicesChanged();
+    if (sounds) startLab();
+  }
+
+  function buildVoiceRows() {
+    ui.voiceList.innerHTML = lab.voices.map((v, i) => voiceRowMarkup(v.id, i + 1)).join('');
+    lab.rows = new Map(Array.from(ui.voiceList.children, (el) => [Number(el.dataset.id), {
+      el,
+      toggle: el.querySelector('.voice-on'),
+      name: el.querySelector('.v-name'),
+      cents: el.querySelector('.v-cents'),
+      info: el.querySelector('.v-info'),
+      freq: el.querySelector('.v-freq'),
+      hz: el.querySelector('.hz-value'),
+      level: el.querySelector('.v-level'),
+    }]));
+    const count = lab.voices.length;
+    ui.voicesEmpty.hidden = count > 0;
+    ui.voiceCount.textContent = count ? `${count} of ${Tones.MAX_VOICES}` : '';
+    ui.voiceAdd.disabled = count >= Tones.MAX_VOICES;
+    [ui.semiDown, ui.semiUp, ui.octDown, ui.octUp, ui.labClear].forEach((b) => { b.disabled = !count; });
+  }
+
+  function voiceRowMarkup(id, n) {
+    return `<li class="voice" data-id="${id}">`
+      + `<button type="button" class="voice-on" data-action="toggle" aria-label="Tone ${n} sounds" title="Switch this tone on or off"></button>`
+      + '<div class="voice-note"><span class="v-name"></span><span class="v-cents"></span><span class="v-info"></span></div>'
+      + `<input type="range" class="v-freq" min="0" max="${Tones.SLIDER_STEPS}" step="1" aria-label="Frequency of tone ${n}">`
+      + '<div class="hz">'
+      + '<button type="button" data-action="down" aria-label="Down to the next note" title="Down to the next note">−</button>'
+      + `<input type="text" class="hz-value" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="Tone ${n} in Hz"`
+      + ' title="Type a frequency, or a note such as A4 · arrow keys: 1 Hz, with Shift 10 Hz">'
+      + '<span class="hz-unit">Hz</span>'
+      + '<button type="button" data-action="up" aria-label="Up to the next note" title="Up to the next note">+</button>'
+      + '</div>'
+      + `<input type="range" class="v-level" min="0" max="100" step="1" aria-label="Level of tone ${n}" title="Level">`
+      + `<button type="button" class="voice-remove" data-action="remove" aria-label="Remove tone ${n}" title="Remove this tone">`
+      + '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
+      + '</button></li>';
+  }
+
+  function renderVoiceRows(a) {
+    const ping = arpSounding();
+    lab.voices.forEach((v) => {
+      const row = lab.rows.get(v.id);
+      if (!row) return;
+      const midi = nearestMidi(v.freq);
+      row.el.classList.toggle('off', !v.on);
+      row.el.classList.toggle('ping', ping.includes(v.id));
+      row.toggle.setAttribute('aria-pressed', String(v.on));
+      row.name.innerHTML = labNoteMarkup(midi, a.names, 'v-oct');
+      setText(row.cents, centsText((exactMidi(v.freq) - midi) * 100));
+      setText(row.info, voiceRole(v, midi, a));
+      // What someone is typing or dragging stays theirs.
+      if (document.activeElement !== row.hz) row.hz.value = fmtHz(v.freq);
+      if (document.activeElement !== row.freq) row.freq.value = String(Tones.freqToSlider(v.freq));
+      row.level.value = String(Math.round(v.gain * 100));
+    });
+  }
+
+  // ---- keyboard
+
+  function buildKeys() {
+    const first = 12 * (settings.lab.keys + 1);
+    let whites = 0;
+    ui.keys.innerHTML = '';
+    lab.keyEls = [];
+    for (let k = 0; k <= 12 * KEYS_OCTAVES; k++) {
+      const midi = first + k;
+      const black = BLACK_KEYS.includes(k % 12);
+      const key = document.createElement('button');
+      key.type = 'button';
+      key.className = black ? 'key black' : 'key white';
+      key.dataset.midi = String(midi);
+      key.dataset.oct = String(Math.floor(k / 12));
+      key.setAttribute('aria-label', `${Tones.NAMES[k % 12]}${Tones.octaveOf(midi)}`);
+      if (black) key.style.setProperty('--i', String(whites));
+      else whites++;
+      key.appendChild(document.createElement('span')).className = 'key-label';
+      ui.keys.appendChild(key);
+      lab.keyEls.push(key);
+    }
+    ui.keysDown.disabled = settings.lab.keys <= 1;
+    ui.keysUp.disabled = settings.lab.keys >= 5;
+  }
+
+  function renderKeys(a) {
+    const sounding = new Set(a.midis);
+    const ping = new Set(arpSounding().map((id) => voiceById(id)).filter(Boolean).map((v) => nearestMidi(v.freq)));
+    lab.keyEls.forEach((key) => {
+      const midi = Number(key.dataset.midi);
+      const on = sounding.has(midi);
+      key.classList.toggle('on', on);
+      key.classList.toggle('ping', ping.has(midi));
+      key.classList.toggle('loop', !!(prog.keys && prog.keys.has(midi)));   // the chord the loop is playing
+      key.setAttribute('aria-pressed', String(on));
+      setText(key.firstChild, on ? labNoteName(midi, a.names) : pitchClass(midi) === 0 ? `C${Tones.octaveOf(midi)}` : '');
+    });
+  }
+
+  function shiftKeys(dir) {
+    settings.lab.keys = clamp(settings.lab.keys + dir, 1, 5);
+    saveSettings();
+    buildKeys();
+    renderLab();
+  }
+
+  // After a preset is loaded, moves the keyboard to its notes if they are off it.
+  function followKeys() {
+    const midis = lab.voices.map((v) => nearestMidi(v.freq));
+    const first = 12 * (settings.lab.keys + 1);
+    if (!midis.length || midis.every((m) => m >= first && m <= first + 12 * KEYS_OCTAVES)) return;
+    settings.lab.keys = clamp(Math.floor(Math.min(...midis) / 12) - 1, 1, 5);
+    buildKeys();
+  }
+
+  // ---- library
+
+  function buildLibrary() {
+    ui.roots.innerHTML = Tones.NAMES.map((name, pc) => `<button type="button" class="root" data-root="${pc}" aria-pressed="false">${noteMarkup(name)}</button>`).join('');
+    const chip = (kind, id, label) => `<button type="button" class="chip-btn" data-kind="${kind}" data-id="${esc(id)}" aria-pressed="false">${esc(label)}</button>`;
+    const groups = [];
+    Tones.CHORDS.forEach((c) => {
+      let group = groups.find((g) => g.name === c.group);
+      if (!group) groups.push(group = { name: c.group, chips: [], fixed: true });
+      group.chips.push(chip('chord', c.id, ''));
+    });
+    groups.push({ name: 'Intervals', chips: Tones.INTERVALS.filter((i) => i.semis > 0).map((i) => chip('interval', i.id, i.name)) });
+    groups.push({ name: 'Experiments', chips: Tones.EXPERIMENTS.map((e) => chip('experiment', e.id, e.name)) });
+    // Chord chips are relabelled with the root, so they sit on fixed columns and never reflow.
+    ui.libGroups.innerHTML = groups.map((g) => `<div class="lib-group"><h3>${esc(g.name)}</h3>`
+      + `<div class="chips${g.fixed ? ' fixed' : ''}">${g.chips.join('')}</div></div>`).join('');
+    lab.chipEls = Array.from(ui.libGroups.querySelectorAll('.chip-btn'));
+    labelLibrary();
+  }
+
+  // Chord chips read as symbols on the chosen root: C, Cm, C7 …
+  function labelLibrary() {
+    const { root, octave } = settings.lab;
+    lab.chipEls.forEach((b) => {
+      const rootMidi = 12 * (octave + 1) + root;
+      if (b.dataset.kind === 'chord') {
+        const c = Tones.chordAt(b.dataset.id, root);
+        b.textContent = c.symbol;
+        b.title = `${c.name}: ${c.notes.join(' ')}`;
+      } else if (b.dataset.kind === 'interval') {
+        const [low, high] = Tones.spellInterval(rootMidi, rootMidi + Tones.intervalById(b.dataset.id).semis);
+        b.title = `${low} up to ${high}`;
+      }
+    });
+    Array.from(ui.roots.children).forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.root) === root)));
+    ui.libOctave.textContent = String(octave);
+    ui.libOctaveDown.disabled = octave <= 1;
+    ui.libOctaveUp.disabled = octave >= 6;
+  }
+
+  function renderLibraryState() {
+    const p = lab.preset;
+    lab.chipEls.forEach((b) => {
+      b.setAttribute('aria-pressed', String(!!p && !lab.edited && b.dataset.kind === p.kind && b.dataset.id === p.id));
+    });
+    ui.explain.hidden = !p;
+    if (!p) return;
+    setText(ui.explainTitle, p.title);
+    setText(ui.explainText, p.text);
+    ui.explainSong.hidden = !p.song;
+    setText(ui.explainSong, p.song ? `Think of ${p.song}` : '');
+  }
+
+  function loadPreset(kind, id) {
+    const { root, octave } = settings.lab;
+    const rootMidi = 12 * (octave + 1) + root;
+    const fromMidi = (m) => ({ freq: Pitch.midiToFreq(m, settings.a4) });
+    let voices;
+    let preset;
+    if (kind === 'chord') {
+      const c = Tones.chordAt(id, root);
+      voices = Tones.chordNotes(id, rootMidi).map(fromMidi);
+      preset = { title: `${c.name} · ${c.notes.join(' ')}`, text: c.text };
+    } else if (kind === 'interval') {
+      const iv = Tones.intervalById(id);
+      const [low, high] = Tones.spellInterval(rootMidi, rootMidi + iv.semis);
+      voices = [rootMidi, rootMidi + iv.semis].map(fromMidi);
+      preset = { title: `${iv.name} · ${low} up to ${high}`, text: iv.text, song: iv.song };
+    } else {
+      const e = Tones.experimentById(id);
+      voices = Tones.experimentVoices(id, settings.a4);
+      preset = { title: e.name, text: e.text };
+      setSound(e.wave);
+    }
+    lab.preset = Object.assign(preset, { kind, id });
+    lab.edited = false;
+    lab.voices = voices.map((v) => newVoice(v.freq, v.gain, v.on));
+    followKeys();
+    voicesChanged();
+    startLab();
+  }
+
+  // A new root or octave replays the chord or interval, unless the tones have been changed since.
+  function libraryChanged() {
+    saveSettings();
+    labelLibrary();
+    const p = lab.preset;
+    if (p && !lab.edited && (p.kind === 'chord' || p.kind === 'interval')) loadPreset(p.kind, p.id);
+  }
+
+  // The tones' sound: a plain wave or an instrument. Sounding tones are struck again in it.
+  function setSound(id) {
+    settings.lab.sound = id;
+    ui.wave.value = id;
+    if (audio.mixer) audio.mixer.setSound('tones', id);
+    restrikeLab();
+    saveSettings();
+    renderLabPlaying();
+  }
+
+  function setVolume(volume) {
+    settings.lab.volume = clamp(volume, 0, 1);
+    if (audio.monitor) audio.monitor.gain.setTargetAtTime(monitorLevel(), audio.ctx.currentTime, 0.02);
+    saveLabSoon();
+  }
+
+  // Sound selects list the plain waves and the instruments, grouped.
+  function fillSounds(select, firstGroup) {
+    const groups = Instruments.GROUPS.slice().sort((a, b) => (b === firstGroup) - (a === firstGroup));
+    select.innerHTML = groups.map((g) => `<optgroup label="${esc(g)}">`
+      + Instruments.PRESETS.filter((p) => p.group === g).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')
+      + '</optgroup>').join('');
+  }
+
+  // --------------------------------------------------------------- progression
+
+  const PARTS = ['chords', 'bass', 'drums'];
+  const loopKey = () => settings.loop.key;
+  const blockRootPc = (b) => pitchClass(loopKey().tonic + b.degree);
+  const blockSymbol = (b) => Tones.chordAt(b.chord, blockRootPc(b)).symbol;
+  const blockNumeral = (b) => Song.numeral(b.degree, b.chord, loopKey().mode);
+  const loopOptions = () => ({
+    secondsPerBeat: 60 / settings.bpm,
+    sounds: { chords: settings.loop.chords.sound, bass: settings.loop.bass.sound },
+    a4: settings.a4,
+  });
+
+  function showLoopMessage(text) {
+    ui.timelineHint.textContent = text;
+    ui.timelineHint.classList.add('message');
+    clearTimeout(prog.messageTimer);
+    prog.messageTimer = setTimeout(() => {
+      ui.timelineHint.textContent = LOOP_HINT;
+      ui.timelineHint.classList.remove('message');
+    }, LAB_MESSAGE_MS);
+  }
+
+  // Undo keeps the loop (and tempo) as it was before each change.
+  function remember() {
+    prog.history.push(JSON.stringify({ loop: settings.loop, bpm: settings.bpm, songId: settings.songId }));
+    if (prog.history.length > 80) prog.history.shift();
+    ui.loopUndo.disabled = false;
+  }
+
+  function undo() {
+    const snapshot = prog.history.pop();
+    if (!snapshot) return;
+    const s = JSON.parse(snapshot);
+    settings.loop = Song.normaliseLoop(s.loop, SOUND_IDS);
+    settings.songId = s.songId;
+    if (s.bpm !== settings.bpm) setLoopBpm(s.bpm);
+    prog.selected = -1;
+    applyPartLevels();
+    renderProgressionControls();
+    loopChanged();
+    showLoopMessage('Undone');
+  }
+
+  // After any change to the loop: stored, replayed from where it is, redrawn.
+  function loopChanged() {
+    clearTimeout(prog.saveTimer);
+    prog.saveTimer = setTimeout(saveSettings, LAB_SAVE_MS);
+    if (prog.playing) rearrange();
+    renderTimeline();
+    renderLoopInfo();
+  }
+
+  function applyPartLevels() {
+    if (!audio.mixer) return;
+    const t = audio.ctx.currentTime;
+    const l = settings.loop;
+    PARTS.forEach((p) => audio.mixer.part(p).input.gain.setTargetAtTime(l[p].on ? partLevel(l[p].volume) : 0, t, 0.02));
+    audio.mixer.part('preview').input.gain.setTargetAtTime(partLevel(l.chords.volume), t, 0.02);
+    audio.mixer.setSound('chords', l.chords.sound);
+    audio.mixer.setSound('preview', l.chords.sound);
+    audio.mixer.setSound('bass', l.bass.sound);
+  }
+
+  // ---- blocks
+
+  function insertBlock(block, index) {
+    const blocks = settings.loop.blocks;
+    if (blocks.length >= Song.MAX_BLOCKS) {
+      showLoopMessage(`Up to ${Song.MAX_BLOCKS} chords in a loop.`);
+      return;
+    }
+    remember();
+    const at = clamp(index, 0, blocks.length);
+    blocks.splice(at, 0, { degree: pitchClass(block.degree), chord: block.chord, beats: block.beats || Song.BEATS_PER_BAR });
+    prog.selected = at;
+    loopChanged();
+    previewBlock(at);
+  }
+
+  function moveBlock(from, to) {
+    const blocks = settings.loop.blocks;
+    const at = to > from ? to - 1 : to;
+    if (at === from) return;
+    remember();
+    blocks.splice(at, 0, blocks.splice(from, 1)[0]);
+    prog.selected = at;
+    loopChanged();
+  }
+
+  function removeBlock(index) {
+    remember();
+    settings.loop.blocks.splice(index, 1);
+    prog.selected = Math.min(prog.selected, settings.loop.blocks.length - 1);
+    loopChanged();
+  }
+
+  function resizeBlock(index, delta) {
+    const b = settings.loop.blocks[index];
+    const beats = clamp(b.beats + delta, Song.MIN_BEATS, Song.MAX_BEATS);
+    if (beats === b.beats) return;
+    remember();
+    b.beats = beats;
+    loopChanged();
+  }
+
+  // A block's chord goes up top: named, explained and on the keyboard, and heard once in the loop's sound.
+  function previewBlock(index) {
+    const a = Song.arrange(settings.loop);
+    const block = a.blocks[index];
+    if (!block) return;
+    prog.selected = index;
+    renderTimelineSelection();
+    const c = Tones.chordAt(block.chord, block.rootPc);
+    lab.preset = { kind: 'progression', id: block.chord, title: `${c.name} · ${c.notes.join(' ')}`, text: c.text };
+    lab.edited = false;
+    lab.voices = block.voicing.map((m) => newVoice(Pitch.midiToFreq(m, settings.a4)));
+    followKeys();
+    voicesChanged();
+    if (prog.playing || lab.playing) return;   // the loop, or the tones themselves, are already sounding
+    const ctx = audioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const bus = labMixer().part('preview').input;
+    const t = ctx.currentTime + 0.02;
+    block.voicing.forEach((m, i) => Instruments.playNote(ctx, bus, settings.loop.chords.sound, Pitch.midiToFreq(m, settings.a4),
+      t + i * 0.012, 1.5, 0.8 * Instruments.PART_LEVEL.chords));
+  }
+
+  // The chord the tones make goes into the loop, after the selected block.
+  function addSoundingChord() {
+    const c = labAnalysis().chord;
+    if (!c) {
+      showLoopMessage('Make a chord of three or more notes first: on the keyboard, or with the chord library below.');
+      return;
+    }
+    const at = prog.selected >= 0 ? prog.selected + 1 : settings.loop.blocks.length;
+    insertBlock({ degree: c.rootPc - loopKey().tonic, chord: c.id }, at);
+  }
+
+  // ---- playing the loop
+
+  // Every note goes through a bus of its own for this run, so stopping silences what is already scheduled.
+  function startLoop() {
+    const a = Song.arrange(settings.loop);
+    if (!a.beats) {
+      showLoopMessage('Add some chords to the loop first.');
+      return;
+    }
+    const ctx = audioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const mixer = labMixer();
+    applyPartLevels();
+    const buses = {};
+    PARTS.forEach((p) => {
+      buses[p] = ctx.createGain();
+      buses[p].connect(mixer.part(p).input);
+    });
+    const start = ctx.currentTime + CLICK_START_DELAY_S;
+    Object.assign(prog, { playing: true, arrangement: a, buses, anchor: start, until: start, cycle: 0, next: 0, block: -1 });
+    pumpLoop();
+    prog.timer = setInterval(pumpLoop, CLICK_TIMER_MS);
+    renderLoopPlaying();
+  }
+
+  function stopLoop() {
+    if (!prog.playing) return;
+    clearInterval(prog.timer);
+    const t = audio.ctx.currentTime;
+    Object.values(prog.buses).forEach((bus) => {
+      fadeOut(bus.gain, t);
+      setTimeout(() => bus.disconnect(), LAB_FADE_S * 3000 + 100);
+    });
+    Object.assign(prog, { playing: false, buses: null, block: -1, keys: null });
+    renderLoopPlaying();
+    renderPlayhead();
+    renderKeys(labAnalysis());
+  }
+
+  // Schedules the notes due in the next moment on the audio clock, round and round (like the metronome).
+  function pumpLoop() {
+    const ctx = audio.ctx;
+    const a = prog.arrangement;
+    const spb = 60 / settings.bpm;
+    const until = ctx.currentTime + (document.hidden ? CLICK_LOOKAHEAD_HIDDEN_S : CLICK_LOOKAHEAD_S);
+    const options = loopOptions();
+    for (;;) {
+      if (prog.next >= a.events.length) {
+        prog.next = 0;
+        prog.cycle++;
+      }
+      const e = a.events[prog.next];
+      const time = prog.anchor + (prog.cycle * a.beats + e.t) * spb;
+      if (time >= until) break;
+      if (time > ctx.currentTime - 0.02) Instruments.playEvent(ctx, prog.buses, e, time, options);
+      prog.next++;
+    }
+    prog.until = until;
+  }
+
+  // The loop changed while playing: carry on from the same beat in the new arrangement.
+  function rearrange() {
+    const a = Song.arrange(settings.loop);
+    if (!a.beats) {
+      stopLoop();
+      return;
+    }
+    const beat = ((prog.until - prog.anchor) * settings.bpm) / 60;
+    prog.arrangement = a;
+    prog.cycle = Math.floor(beat / a.beats);
+    const offset = beat - prog.cycle * a.beats;
+    prog.next = a.events.findIndex((e) => e.t >= offset - 1e-9);
+    if (prog.next < 0) {
+      prog.next = 0;
+      prog.cycle++;
+    }
+    prog.block = -1;
+  }
+
+  // A new tempo takes over from the notes not yet scheduled, with no jump in the beat.
+  function setLoopBpm(value) {
+    const old = settings.bpm;
+    applyBpm(value);
+    if (prog.playing) {
+      const beat = ((prog.until - prog.anchor) * old) / 60;
+      prog.anchor = prog.until - (beat * 60) / settings.bpm;
+    }
+    showLoopBpm();
+    renderLoopInfo();
+    renderTempo();
+  }
+
+  function showLoopBpm() {
+    if (document.activeElement !== ui.loopBpm) ui.loopBpm.value = fmtNumber(settings.bpm, 1);
+  }
+
+  // Lights the block being heard, fills its progress bar, and shows its chord on the keyboard.
+  function renderPlayhead() {
+    let index = -1;
+    let fraction = 0;
+    if (prog.playing) {
+      const a = prog.arrangement;
+      const beat = ((heardTime() - prog.anchor) * settings.bpm) / 60;
+      if (beat >= 0) {
+        const pos = beat % a.beats;
+        index = a.blocks.findIndex((b) => pos >= b.start && pos < b.start + b.beats);
+        if (index >= 0) fraction = (pos - a.blocks[index].start) / a.blocks[index].beats;
+      }
+    }
+    if (index !== prog.block) {
+      prog.block = index;
+      prog.blockEls.forEach((el, i) => {
+        el.classList.toggle('now', i === index);
+        if (i !== index) el.lastChild.style.transform = 'scaleX(0)';
+      });
+      prog.keys = index >= 0 ? new Set(prog.arrangement.blocks[index].voicing) : null;
+      renderKeys(labAnalysis());
+    }
+    if (index >= 0 && prog.blockEls[index]) prog.blockEls[index].lastChild.style.transform = `scaleX(${fraction.toFixed(4)})`;
+  }
+
+  function renderLoopPlaying() {
+    ui.app.classList.toggle('loop-playing', prog.playing);
+    ui.loopPlay.setAttribute('aria-pressed', String(prog.playing));
+    ui.loopPlayLabel.textContent = prog.playing ? 'Stop loop' : 'Play loop';
+    renderLabPlaying();
+  }
+
+  // ---- drawing the progression
+
+  function renderProgressionControls() {
+    const l = settings.loop;
+    ui.keyTonic.innerHTML = Tones.NAMES.map((_, pc) => `<option value="${pc}">${esc(Song.tonicName(pc, l.key.mode))}</option>`).join('');
+    ui.keyTonic.value = String(l.key.tonic);
+    ui.keyMode.value = l.key.mode;
+    ui.keySevenths.checked = l.sevenths;
+    ui.chordsSound.value = l.chords.sound;
+    ui.chordsStyle.value = l.style;
+    ui.chordsVoicing.value = l.voicing;
+    ui.bassSound.value = l.bass.sound;
+    ui.bassPattern.value = l.bass.pattern;
+    ui.drumsPattern.value = l.drums.pattern;
+    PARTS.forEach((p) => {
+      ui.partToggles[p].setAttribute('aria-pressed', String(l[p].on));
+      ui.partVolumes[p].value = String(Math.round(l[p].volume * 100));
+    });
+    ui.exportRepeats.value = String(l.repeats);
+    renderPalette();
+    renderSongList();
+    showLoopBpm();
+  }
+
+  function renderPalette() {
+    const l = settings.loop;
+    ui.palette.innerHTML = Song.diatonic(l.key.mode, l.sevenths).map((c) => {
+      const symbol = Tones.chordAt(c.chord, pitchClass(l.key.tonic + c.degree)).symbol;
+      return `<button type="button" class="pal" data-degree="${c.degree}" data-chord="${esc(c.chord)}" title="Click to add ${esc(symbol)} to the loop, or drag it into place">`
+        + `<span class="pal-num">${esc(c.numeral)}</span><span class="pal-sym">${esc(symbol)}</span></button>`;
+    }).join('');
+  }
+
+  function renderTimeline() {
+    const blocks = settings.loop.blocks;
+    ui.timeline.innerHTML = blocks.length
+      ? blocks.map((b, i) => {
+        const symbol = blockSymbol(b);
+        return `<li class="block" data-index="${i}" style="--beats:${b.beats}" tabindex="0" aria-label="${esc(symbol)}, ${b.beats} beats">`
+          + `<span class="b-top"><span class="b-num">${esc(blockNumeral(b))}</span>`
+          + `<button type="button" class="b-remove" data-action="remove" aria-label="Remove ${esc(symbol)}" title="Remove">`
+          + '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></span>'
+          + `<span class="b-sym">${esc(symbol)}</span>`
+          + '<span class="b-len"><button type="button" data-action="shorter" aria-label="One beat shorter" title="One beat shorter">−</button>'
+          + `<span class="b-beats">${b.beats}</span>`
+          + '<button type="button" data-action="longer" aria-label="One beat longer" title="One beat longer">+</button></span>'
+          + '<span class="b-progress"></span></li>';
+      }).join('')
+      : '<li class="timeline-empty">Drop chords here</li>';
+    prog.blockEls = Array.from(ui.timeline.querySelectorAll('.block'));
+    prog.block = -1;
+    renderTimelineSelection();
+  }
+
+  function renderTimelineSelection() {
+    prog.blockEls.forEach((el, i) => el.classList.toggle('selected', i === prog.selected));
+  }
+
+  function renderLoopInfo() {
+    const beats = settings.loop.blocks.reduce((s, b) => s + b.beats, 0);
+    const bars = beats / Song.BEATS_PER_BAR;
+    const length = Number.isInteger(bars) ? `${bars} bar${bars === 1 ? '' : 's'}` : `${beats} beats`;
+    setText(ui.loopLength, beats ? `${length} · ${fmtNumber((beats * 60) / settings.bpm, 1)} s` : 'Empty');
+    ui.loopUndo.disabled = !prog.history.length;
+    ui.loopClear.disabled = !settings.loop.blocks.length;
+    ui.loopPlay.disabled = !prog.playing && !beats;
+    [ui.exportWav, ui.exportStems, ui.exportMidi].forEach((b) => { b.disabled = !beats || prog.exporting; });
+  }
+
+  // ---- dragging chords into the loop
+
+  // Pointer-based rather than HTML drag and drop, so blocks can also be moved on a touch screen.
+  function beginDrag(e, item, el, label) {
+    if (e.button !== 0) return;
+    prog.drag = { item, el, label, x: e.clientX, y: e.clientY, id: e.pointerId, active: false, ghost: null };
+  }
+
+  function overTimeline(x, y) {
+    const r = ui.timeline.getBoundingClientRect();
+    return x >= r.left - 24 && x <= r.right + 24 && y >= r.top - 24 && y <= r.bottom + 24;
+  }
+
+  // Where a chord dropped at a point would go: before or after the nearest block.
+  function dropIndex(x, y) {
+    let best = null;
+    let bestDistance = Infinity;
+    prog.blockEls.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const d = Math.hypot(x - clamp(x, r.left, r.right), y - clamp(y, r.top, r.bottom));
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = { i, r };
+      }
+    });
+    if (!best) return 0;
+    return x < best.r.left + best.r.width / 2 ? best.i : best.i + 1;
+  }
+
+  // The drop point shows as a bar beside a block; nothing moves until the drop.
+  function markDrop(index) {
+    prog.blockEls.forEach((el, i) => {
+      el.classList.toggle('drop-before', i === index);
+      el.classList.toggle('drop-after', index === prog.blockEls.length && i === index - 1);
+    });
+    ui.timeline.classList.toggle('drop-into', index >= 0 && !prog.blockEls.length);
+  }
+
+  function moveDrag(e) {
+    const d = prog.drag;
+    if (!d || e.pointerId !== d.id) return;
+    if (!d.active) {
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) return;
+      d.active = true;
+      d.ghost = document.createElement('div');
+      d.ghost.className = 'drag-ghost';
+      d.ghost.textContent = d.label;
+      document.body.appendChild(d.ghost);
+      d.el.classList.add('lifted');
+      try { d.el.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
+    }
+    e.preventDefault();
+    d.ghost.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`;
+    markDrop(overTimeline(e.clientX, e.clientY) ? dropIndex(e.clientX, e.clientY) : -1);
+  }
+
+  function endDrag(e, drop) {
+    const d = prog.drag;
+    if (!d || (e && e.pointerId !== d.id)) return;
+    prog.drag = null;
+    if (!d.active) return;
+    d.ghost.remove();
+    d.el.classList.remove('lifted');
+    markDrop(-1);
+    // The click that follows a drag is not a click.
+    prog.justDragged = true;
+    setTimeout(() => { prog.justDragged = false; }, 0);
+    if (!drop || !overTimeline(e.clientX, e.clientY)) return;
+    const index = dropIndex(e.clientX, e.clientY);
+    if (d.item.move !== undefined) moveBlock(d.item.move, index);
+    else insertBlock(d.item, index);
+  }
+
+  // ---- saved progressions
+
+  function renderSongList() {
+    ui.songList.innerHTML = '<option value="">New progression</option>'
+      + settings.songs.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+    ui.songList.value = settings.songId;
+  }
+
+  function openSong(id) {
+    remember();
+    const song = settings.songs.find((s) => s.id === id);
+    if (song) {
+      settings.loop = Song.normaliseLoop(JSON.parse(JSON.stringify(song.loop)), SOUND_IDS);
+      settings.songId = id;
+      if (song.bpm !== settings.bpm) setLoopBpm(song.bpm);
+    } else {
+      settings.loop.blocks = [];   // a fresh start in the same key and sounds
+      settings.songId = '';
+    }
+    prog.selected = -1;
+    applyPartLevels();
+    renderProgressionControls();
+    loopChanged();
+  }
+
+  function openSongDialog() {
+    const current = settings.songs.find((s) => s.id === settings.songId);
+    ui.songDialogTitle.textContent = current ? 'Save progression' : 'Save new progression';
+    ui.songName.value = current ? current.name : '';
+    ui.songName.placeholder = `Song idea ${settings.songs.length + 1}`;
+    ui.songDelete.hidden = !current;
+    ui.songSaveNew.hidden = !current;
+    if (ui.songDialog.showModal) ui.songDialog.showModal();
+    else ui.songDialog.setAttribute('open', '');
+    ui.songName.focus();
+  }
+
+  function closeSongDialog() {
+    if (ui.songDialog.close) ui.songDialog.close();
+    else ui.songDialog.removeAttribute('open');
+  }
+
+  function saveSong(asNew) {
+    const name = ui.songName.value.trim() || ui.songName.placeholder;
+    const entry = { name, bpm: settings.bpm, loop: JSON.parse(JSON.stringify(settings.loop)) };
+    const current = !asNew && settings.songs.find((s) => s.id === settings.songId);
+    if (current) {
+      Object.assign(current, entry);
+    } else {
+      const id = `song-${Date.now().toString(36)}`;
+      settings.songs.push(Object.assign({ id }, entry));
+      settings.songId = id;
+    }
+    saveSettings();
+    renderSongList();
+    closeSongDialog();
+    showLoopMessage(`Saved “${name}” in this browser`);
+  }
+
+  function deleteSong() {
+    const current = settings.songs.find((s) => s.id === settings.songId);
+    settings.songs = settings.songs.filter((s) => s !== current);
+    settings.songId = '';
+    saveSettings();
+    renderSongList();
+    closeSongDialog();
+    if (current) showLoopMessage(`Deleted “${current.name}”. The loop itself is still here.`);
+  }
+
+  // ---- export
+
+  // The parts that are switched on and have something to play.
+  function exportParts() {
+    const l = settings.loop;
+    return PARTS.filter((p) => l[p].on && (p === 'chords' || l[p].pattern !== 'off'));
+  }
+
+  function exportName() {
+    const song = settings.songs.find((s) => s.id === settings.songId);
+    const l = settings.loop;
+    const name = `${song ? song.name : 'Chord loop'} · ${Song.keyName(l.key.tonic, l.key.mode)} · ${fmtNumber(settings.bpm, 1)} bpm`;
+    return name.replace(/[\\/:*?"<>|]/g, '-');
+  }
+
+  function download(data, type, name) {
+    const url = URL.createObjectURL(new Blob([data], { type }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  function renderOptions(parts) {
+    const l = settings.loop;
+    return {
+      bpm: settings.bpm,
+      repeats: l.repeats,
+      sounds: { chords: l.chords.sound, bass: l.bass.sound },
+      volumes: { chords: partLevel(l.chords.volume), bass: partLevel(l.bass.volume), drums: partLevel(l.drums.volume) },
+      parts,
+      a4: settings.a4,
+      sampleRate: EXPORT_RATE,
+    };
+  }
+
+  async function exportLoop(kind) {
+    const a = Song.arrange(settings.loop);
+    const parts = exportParts();
+    if (!a.beats || !parts.length) {
+      setText(ui.exportStatus, !a.beats ? 'Add some chords first' : 'Every part is switched off');
+      return;
+    }
+    const base = exportName();
+    const l = settings.loop;
+    prog.exporting = true;
+    renderLoopInfo();
+    try {
+      if (kind === 'midi') {
+        const program = (id) => Instruments.byId(id).program;
+        const bytes = Song.toMidi(a, {
+          bpm: settings.bpm,
+          repeats: l.repeats,
+          name: base,
+          parts: {
+            chords: parts.includes('chords') ? program(l.chords.sound) : null,
+            bass: parts.includes('bass') ? program(l.bass.sound) : null,
+            drums: parts.includes('drums') ? true : null,
+          },
+        });
+        download(bytes, 'audio/midi', `${base}.mid`);
+        setText(ui.exportStatus, `Saved ${base}.mid`);
+      } else if (kind === 'wav') {
+        setText(ui.exportStatus, 'Rendering the mix…');
+        const channels = await Instruments.render(a, renderOptions(parts));
+        download(Recorder.encodeWav(channels, EXPORT_RATE, 24), 'audio/wav', `${base}.wav`);
+        setText(ui.exportStatus, `Saved ${base}.wav`);
+      } else {
+        const files = [];
+        for (const p of parts) {
+          setText(ui.exportStatus, `Rendering ${p} (${files.length + 1} of ${parts.length})…`);
+          const channels = await Instruments.render(a, renderOptions([p]));
+          files.push({ name: `${base} · ${p[0].toUpperCase()}${p.slice(1)}.wav`, data: new Uint8Array(Recorder.encodeWav(channels, EXPORT_RATE, 24)) });
+        }
+        download(Song.zip(files), 'application/zip', `${base} · stems.zip`);
+        setText(ui.exportStatus, `Saved ${base} · stems.zip`);
+      }
+    } catch (err) {
+      setText(ui.exportStatus, `Export failed: ${err.message || err}`);
+    } finally {
+      prog.exporting = false;
+      renderLoopInfo();
+    }
+  }
+
   // ------------------------------------------------------------------- setup
 
   function svgEl(name, attrs, text) {
@@ -1635,6 +3035,7 @@
     saveSettings();
     buildStrings();
     retuneTone();
+    renderLab();   // Sound lab's tones keep their Hz; their note names and cents follow A4
   }
 
   function fillTunings() {
@@ -1747,6 +3148,27 @@
     applyView(null);
     renderTempo();
     renderClickState();
+    fillSounds(ui.wave, 'Waves');
+    ui.wave.value = settings.lab.sound;
+    fillSounds(ui.chordsSound, 'Keys');
+    fillSounds(ui.bassSound, 'Bass');
+    const options = (list) => list.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+    ui.chordsStyle.innerHTML = options(Song.STYLES);
+    ui.chordsVoicing.innerHTML = options(Song.VOICINGS);
+    ui.bassPattern.innerHTML = options(Song.BASS_PATTERNS);
+    ui.drumsPattern.innerHTML = options(Song.DRUM_PATTERNS);
+    ui.progStart.innerHTML = '<option value="">Choose a progression…</option>' + options(Song.PROGRESSIONS);
+    ui.exportRepeats.innerHTML = Song.REPEATS.map((n) => `<option value="${n}">${n === 1 ? 'Once round' : `${n} times round`}</option>`).join('');
+    ui.timelineHint.textContent = LOOP_HINT;
+    renderProgressionControls();
+    renderTimeline();
+    renderLoopInfo();
+    ui.volume.value = String(Math.round(settings.lab.volume * 100));
+    ui.labHint.textContent = LAB_HINT;
+    buildKeys();
+    buildLibrary();
+    buildVoiceRows();
+    renderLab();
     setMode(settings.mode);
     refreshDevices();
 
@@ -1933,11 +3355,308 @@
     ui.a4Down.addEventListener('click', () => setA4(settings.a4 - 1));
     ui.a4Up.addEventListener('click', () => setA4(settings.a4 + 1));
 
+    // Sound lab. Buttons clicked with the mouse give up focus, so the space bar keeps playing and stopping.
+    const blurAfterClick = (e, el) => { if (e.detail) el.blur(); };
+    ui.labPlay.addEventListener('click', () => {
+      if (lab.playing) stopLab();
+      else startLab();
+      ui.labPlay.blur();
+    });
+    ui.labArp.addEventListener('click', () => {
+      if (lab.arp) stopArpeggio();
+      else playArpeggio();
+      ui.labArp.blur();
+    });
+    ui.labClear.addEventListener('click', () => {
+      clearLab();
+      ui.labClear.blur();
+    });
+    ui.wave.addEventListener('change', () => setSound(ui.wave.value));
+    ui.volume.addEventListener('input', () => setVolume(Number(ui.volume.value) / 100));
+    ui.keysDown.addEventListener('click', () => shiftKeys(-1));
+    ui.keysUp.addEventListener('click', () => shiftKeys(1));
+    ui.keys.addEventListener('click', (e) => {
+      const key = e.target.closest('.key');
+      if (!key) return;
+      toggleKey(Number(key.dataset.midi));
+      blurAfterClick(e, key);
+    });
+    ui.voiceAdd.addEventListener('click', (e) => {
+      addTone();
+      blurAfterClick(e, ui.voiceAdd);
+    });
+    [[ui.semiDown, -1], [ui.semiUp, 1], [ui.octDown, -12], [ui.octUp, 12]].forEach(([button, semis]) => {
+      button.addEventListener('click', (e) => {
+        transpose(semis);
+        blurAfterClick(e, button);
+      });
+    });
+    ui.roots.addEventListener('click', (e) => {
+      const button = e.target.closest('.root');
+      if (!button) return;
+      settings.lab.root = Number(button.dataset.root);
+      libraryChanged();
+      blurAfterClick(e, button);
+    });
+    [[ui.libOctaveDown, -1], [ui.libOctaveUp, 1]].forEach(([button, dir]) => {
+      button.addEventListener('click', (e) => {
+        settings.lab.octave = clamp(settings.lab.octave + dir, 1, 6);
+        libraryChanged();
+        blurAfterClick(e, button);
+      });
+    });
+    ui.libGroups.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip-btn');
+      if (!chip || prog.justDragged) return;
+      loadPreset(chip.dataset.kind, chip.dataset.id);
+      blurAfterClick(e, chip);
+    });
+    // Chord chips can also be dragged into the loop.
+    ui.libGroups.addEventListener('pointerdown', (e) => {
+      const chip = e.target.closest('.chip-btn[data-kind="chord"]');
+      if (chip) beginDrag(e, { degree: settings.lab.root - loopKey().tonic, chord: chip.dataset.id }, chip, chip.textContent);
+    });
+
+    // Progression.
+    ui.palette.addEventListener('pointerdown', (e) => {
+      const chip = e.target.closest('.pal');
+      if (chip) beginDrag(e, { degree: Number(chip.dataset.degree), chord: chip.dataset.chord }, chip, chip.lastChild.textContent);
+    });
+    ui.palette.addEventListener('click', (e) => {
+      const chip = e.target.closest('.pal');
+      if (!chip || prog.justDragged) return;
+      insertBlock({ degree: Number(chip.dataset.degree), chord: chip.dataset.chord }, settings.loop.blocks.length);
+      blurAfterClick(e, chip);
+    });
+    ui.timeline.addEventListener('pointerdown', (e) => {
+      const block = e.target.closest('.block');
+      if (block && !e.target.closest('button')) {
+        const i = Number(block.dataset.index);
+        beginDrag(e, { move: i }, block, blockSymbol(settings.loop.blocks[i]));
+      }
+    });
+    ui.timeline.addEventListener('click', (e) => {
+      const block = e.target.closest('.block');
+      if (!block || prog.justDragged) return;
+      const i = Number(block.dataset.index);
+      const button = e.target.closest('button[data-action]');
+      if (!button) previewBlock(i);
+      else if (button.dataset.action === 'remove') removeBlock(i);
+      else resizeBlock(i, button.dataset.action === 'longer' ? 1 : -1);
+    });
+    ui.timeline.addEventListener('keydown', (e) => {
+      const block = e.target.closest('.block');
+      if (!block || e.target !== block) return;
+      const i = Number(block.dataset.index);
+      const focus = (index) => { if (prog.blockEls[index]) prog.blockEls[index].focus(); };
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        removeBlock(i);
+        focus(Math.min(i, settings.loop.blocks.length - 1));
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        previewBlock(i);
+        focus(i);
+      } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        const to = e.key === 'ArrowLeft' ? i - 1 : i + 2;
+        if (to >= 0 && to <= settings.loop.blocks.length) {
+          moveBlock(i, to);
+          focus(prog.selected);
+        }
+      }
+    });
+    document.addEventListener('pointermove', moveDrag);
+    document.addEventListener('pointerup', (e) => endDrag(e, true));
+    document.addEventListener('pointercancel', (e) => endDrag(e, false));
+
+    ui.keyTonic.addEventListener('change', () => {
+      remember();
+      settings.loop.key.tonic = Number(ui.keyTonic.value);
+      renderPalette();
+      loopChanged();
+    });
+    ui.keyMode.addEventListener('change', () => {
+      remember();
+      settings.loop.key.mode = ui.keyMode.value;
+      renderProgressionControls();
+      loopChanged();
+    });
+    ui.keySevenths.addEventListener('change', () => {
+      settings.loop.sevenths = ui.keySevenths.checked;
+      renderPalette();
+      saveSettings();
+    });
+    ui.progStart.addEventListener('change', () => {
+      const p = Song.progressionById(ui.progStart.value);
+      ui.progStart.value = '';
+      if (!p) return;
+      remember();
+      settings.loop.blocks = Song.progressionBlocks(p.id);
+      settings.loop.key.mode = p.mode;
+      prog.selected = -1;
+      renderProgressionControls();
+      loopChanged();
+      showLoopMessage(`${p.name} in ${Song.keyName(settings.loop.key.tonic, p.mode)}`);
+    });
+
+    ui.loopPlay.addEventListener('click', () => {
+      if (prog.playing) stopLoop();
+      else startLoop();
+      ui.loopPlay.blur();
+    });
+    ui.loopBpmDown.addEventListener('click', () => setLoopBpm(settings.bpm - 1));
+    ui.loopBpmUp.addEventListener('click', () => setLoopBpm(settings.bpm + 1));
+    ui.loopBpm.addEventListener('focus', () => ui.loopBpm.select());
+    ui.loopBpm.addEventListener('change', () => {
+      const value = Tempo.parseBpm(ui.loopBpm.value);
+      if (!Number.isNaN(value)) setLoopBpm(value);
+      ui.loopBpm.value = fmtNumber(settings.bpm, 1);
+    });
+    ui.loopBpm.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') ui.loopBpm.blur();
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setLoopBpm(settings.bpm + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1));
+        ui.loopBpm.value = fmtNumber(settings.bpm, 1);
+        ui.loopBpm.select();
+      }
+    });
+    ui.blockAdd.addEventListener('click', (e) => {
+      addSoundingChord();
+      blurAfterClick(e, ui.blockAdd);
+    });
+    ui.loopUndo.addEventListener('click', undo);
+    ui.loopClear.addEventListener('click', () => {
+      remember();
+      settings.loop.blocks = [];
+      prog.selected = -1;
+      loopChanged();
+      showLoopMessage('Cleared. Undo brings the chords back.');
+    });
+
+    PARTS.forEach((p) => {
+      ui.partToggles[p].addEventListener('click', (e) => {
+        settings.loop[p].on = !settings.loop[p].on;
+        ui.partToggles[p].setAttribute('aria-pressed', String(settings.loop[p].on));
+        applyPartLevels();
+        saveSettings();
+        blurAfterClick(e, ui.partToggles[p]);
+      });
+      ui.partVolumes[p].addEventListener('input', () => {
+        settings.loop[p].volume = Number(ui.partVolumes[p].value) / 100;
+        applyPartLevels();
+        clearTimeout(prog.saveTimer);
+        prog.saveTimer = setTimeout(saveSettings, LAB_SAVE_MS);
+      });
+    });
+    // Choices that change what the loop plays can be undone.
+    [
+      [ui.chordsSound, (v) => { settings.loop.chords.sound = v; }],
+      [ui.chordsStyle, (v) => { settings.loop.style = v; }],
+      [ui.chordsVoicing, (v) => { settings.loop.voicing = v; }],
+      [ui.bassSound, (v) => { settings.loop.bass.sound = v; }],
+      [ui.bassPattern, (v) => { settings.loop.bass.pattern = v; }],
+      [ui.drumsPattern, (v) => { settings.loop.drums.pattern = v; }],
+    ].forEach(([select, apply]) => select.addEventListener('change', () => {
+      remember();
+      apply(select.value);
+      applyPartLevels();
+      loopChanged();
+    }));
+    ui.exportRepeats.addEventListener('change', () => {
+      settings.loop.repeats = Number(ui.exportRepeats.value);
+      saveSettings();
+    });
+    ui.exportWav.addEventListener('click', () => exportLoop('wav'));
+    ui.exportStems.addEventListener('click', () => exportLoop('stems'));
+    ui.exportMidi.addEventListener('click', () => exportLoop('midi'));
+
+    ui.songList.addEventListener('change', () => openSong(ui.songList.value));
+    ui.songSave.addEventListener('click', openSongDialog);
+    ui.songForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveSong(false);
+    });
+    ui.songSaveNew.addEventListener('click', () => saveSong(true));
+    ui.songCancel.addEventListener('click', closeSongDialog);
+    ui.songDelete.addEventListener('click', deleteSong);
+
+    const rowVoice = (el) => {
+      const row = el.closest('.voice');
+      return row ? voiceById(Number(row.dataset.id)) : null;
+    };
+    const isHz = (el) => el.classList.contains('hz-value');
+    ui.voiceList.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-action]');
+      const v = button && rowVoice(button);
+      if (!v) return;
+      const action = button.dataset.action;
+      if (action === 'toggle') {
+        v.on = !v.on;
+        if (v.on && lab.playing) dropVoiceNode(v.id, audio.ctx.currentTime);   // struck afresh, so a piano is heard again
+        voiceEdited();
+      } else if (action === 'down' || action === 'up') {
+        stepVoice(v, action === 'up' ? 1 : -1);
+      } else if (action === 'remove') {
+        const index = lab.voices.indexOf(v);
+        removeVoice(v);
+        // From the keyboard, focus moves on to the next row's remove button (the rows were rebuilt).
+        if (!e.detail) (ui.voiceList.querySelectorAll('.voice-remove')[Math.min(index, lab.voices.length - 1)] || ui.voiceAdd).focus();
+        return;
+      }
+      blurAfterClick(e, button);
+    });
+    ui.voiceList.addEventListener('input', (e) => {
+      const v = rowVoice(e.target);
+      if (!v) return;
+      if (e.target.classList.contains('v-freq')) {
+        setVoiceFreq(v, Tones.tidyFreq(Tones.sliderToFreq(Number(e.target.value))));
+      } else if (e.target.classList.contains('v-level')) {
+        v.gain = Number(e.target.value) / 100;
+        voiceEdited();
+      }
+    });
+    ui.voiceList.addEventListener('change', (e) => {
+      const v = isHz(e.target) && rowVoice(e.target);
+      if (v) commitHz(v, e.target);
+    });
+    ui.voiceList.addEventListener('keydown', (e) => {
+      const v = isHz(e.target) && rowVoice(e.target);
+      if (!v) return;
+      if (e.key === 'Enter') {
+        e.target.blur();
+      } else if (e.key === 'Escape') {
+        e.target.value = fmtHz(v.freq);
+        e.target.blur();
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        nudgeHz(v, e.target, (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1));
+      }
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && (lockedString >= 0 || tone.string >= 0)) {
         lockedString = -1;
         stopTone();
         updateLockMarks();
+      }
+      if (settings.mode === 'lab') {
+        const target = e.target instanceof Element ? e.target : document.body;
+        if (target.closest('select, textarea, dialog, input:not([type="range"])')) return;   // typing
+        if (e.key === 'Escape') {
+          stopLab();
+          stopArpeggio();
+          stopLoop();
+        } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+          e.preventDefault();
+          undo();
+        } else if (e.key === ' ' && !e.repeat && !target.closest('button, .block')) {
+          e.preventDefault();
+          if (lab.playing) stopLab();
+          else startLab();
+        }
+        return;
       }
       if (settings.mode !== 'tempo' || e.repeat) return;
       const tag = e.target && e.target.tagName;

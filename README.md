@@ -3,7 +3,7 @@
 A small, clean toolbox for home recording that runs in your browser and talks
 directly to your audio interface. No dependencies, no build step, no account.
 
-Today it does four things well:
+Today it does five things well:
 
 | Tuner | Tempo |
 | --- | --- |
@@ -12,6 +12,9 @@ Today it does four things well:
 | **Record** | **Analysis** |
 | ![Record mode with the level meter in the target zone and a take](docs/record.png) | ![Recording check of a vocal take](docs/analysis.png) |
 | A gain-staging meter, a room-noise check and a quick recorder that saves WAV files and hands takes to the analysis | Drop a vocal take and get its levels, noise, clipping, plosives and hum explained in plain words |
+| **Sound lab** | |
+| ![Sound lab playing a chord progression in G minor](docs/lab.png) | |
+| Play tones in Hz and chords in 23 synthesised sounds, learn what makes them tick, and sketch chord progressions with bass and drums, exported as WAV, stems or MIDI | |
 
 ## Getting started
 
@@ -214,13 +217,136 @@ side are analysed as one channel, other stereo files as their mono sum; all
 spectral values come from one STFT (Hann, 4096 samples, 50 % overlap), except
 the hum check, which needs about 3 Hz of resolution and averages a longer FFT.
 
+## Sound lab
+
+Switch to **Sound lab** to play with tones: single frequencies, intervals and
+chords of up to eight tones, with the names, numbers and a picture of what you
+hear. Below them, sketch a song's chord progression and take it to your DAW.
+It does not need microphone access.
+
+- **Tones.** Every tone has a row. The dot switches it on and off, and the
+  slider sweeps it from 20 Hz to 20 kHz (logarithmic, so every octave gets the
+  same room). You can also type into its frequency: a number (`440`, `261,6`,
+  `1.5k`) or a note (`A4`, `Eb2`, `F#3`). While the frequency is selected the
+  arrow keys move it by 1 Hz, with Shift by 10. **−** and **+** step to the
+  next note below or above, which also snaps a slid tone back onto the notes.
+  The small slider on the right is the tone's level. **Add tone** adds one a
+  fifth above the highest, **Transpose** moves every tone by a semitone or an
+  octave, and **Clear** removes them all.
+- **Keyboard.** Click a key to add its note, and again to take it away; the
+  arrows show other octaves (a phone shows two octaves). The keys of the
+  sounding tones light up, named as they are spelled in the chord.
+- **Playing.** **Play** (or the space bar) starts and stops the tones. Loading
+  a chord, clicking a key or adding a tone starts them too, and Escape stops
+  everything. **Arpeggio** plays the tones one at a time, lowest first, then
+  all together, lighting each key as it sounds. **Volume** is Sound lab's
+  own and never changes an export. The tones together never go past full
+  scale: when their levels add up to more than one, each is turned down in
+  proportion, and a limiter at the end of the mix catches the rest.
+- **Sounds.** **Sound** in the top bar picks what the tones play:
+  - Waves: soft (the tuner's reference tone), sine, triangle, square, sawtooth
+  - Keys: piano, electric piano, organ, music box
+  - Guitars & strings: acoustic guitar, nylon guitar, harp, strings
+  - Synths: warm pad, dream pad, supersaw, analog poly, synth pluck, glass
+    bells, 8-bit
+  - Bass: finger bass, synth bass, sub bass
+
+  Everything is synthesised in the browser, so there is nothing to download
+  and it works offline. The piano is built from slightly inharmonic partials
+  that each die away at their own rate, the guitars, harp and finger bass are
+  physically modelled plucked strings (Karplus–Strong), the electric piano and
+  bells use FM, and the rest are classic subtractive synths with filter
+  envelopes, detuned oscillators and a little room reverb. Every sound is
+  trimmed to the same loudness, so switching between them doesn't jump in
+  level. A piano or guitar dies away like the real thing: press **Play** again,
+  or switch a tone off and on, to strike it again.
+- **What you hear.** The big readout names it. A note comes with its frequency
+  and cents. An interval comes with its size, its pure ratio and how far off
+  it the tones are (a piano's fifth is 2 ¢ narrower than a pure 3:2, its major
+  third 14 ¢ wider than 5:4), plus a tune that starts with it. A chord comes
+  with its inversion and its notes spelled the way musicians write them: C
+  minor has an E♭, D♭7 a C♭. Each row says what its tone is (root, major 3rd,
+  5th …). Two tones on the same note a few Hz apart beat, and the readout says
+  how often. The readout keeps its size whatever it shows, so the keyboard and
+  buttons below it never move.
+- **Waveform.** With a plain wave, the tones added together, drawn from the
+  same maths as the sound: four cycles of the lowest tone, or two beats when
+  tones beat, so the swelling shows. With an instrument, or while the loop
+  plays, what actually comes out, live.
+- **Chords, intervals & experiments.** Pick a root and an octave, then click a
+  chord (triads, sevenths, sixths and added notes, ninths) or an interval to
+  hear it, with a few words on its character. A new root or octave replays it
+  there. The experiments each come with an explanation: beating (how tuning by
+  ear works), a pure against a piano-tuned major third, the harmonic series,
+  the missing fundamental (why a bass still sounds low on phone speakers) and
+  a detuned unison, the "supersaw" of synth leads.
+
+The tones, the sound, the volume and the root are remembered. A4 is shared
+with the tuner. When it changes, tones keep their frequency, and their note
+names and cents follow the new reference.
+
+### Progression
+
+The **Progression** card is a sketchpad for the chords of a song: lay them out
+in a loop, hear them with a bass line and drums, and take the result to your
+DAW as audio or MIDI.
+
+- **Key.** Pick a key and major or minor, and the card offers that key's
+  chords with their Roman numerals: I ii iii IV V vi vii° in major, and in
+  minor also the major V that minor songs lean on. **7th chords** turns them
+  into seventh chords. **Start from** loads a famous progression in the
+  current key: pop I–V–vi–IV, 50s I–vi–IV–V, vi–IV–I–V, Pachelbel's canon,
+  I–♭VII–IV–I, the royal road, jazz ii–V–I, neo-soul, the 12-bar blues, the
+  Andalusian cadence, i–VI–III–VII and i–iv–V–i. Chords are stored relative to
+  the key, so changing the key transposes the whole song.
+- **The loop.** Drag a chord from the key's chords, or from the chord library
+  further down, to where it should go in the loop, or click one to add it at
+  the end. **Add sounding chord** adds whatever chord the tones above make
+  (built on the keyboard, say) after the selected block. Each block shows its
+  numeral and name and lasts a bar; **−** and **+** make it 1 to 8 beats long.
+  Drag blocks to reorder them (on a touch screen too), click one to hear it and
+  see it named and explained above, **×** removes it. From the keyboard:
+  Enter plays a focused block, Delete removes it, Alt+← and Alt+→ move it.
+  **Undo** (or Ctrl+Z) steps back through every change.
+- **Playing.** **Play loop** plays it round and round at the tempo next to it,
+  which is shared with the Tempo tab, so you can tap a song's tempo there. The
+  block being heard lights up with a progress bar, and its chord shows on the
+  keyboard. Everything can change while the loop plays: chords, sounds, tempo,
+  parts; the change is heard from the next note, in time. You can also play the
+  tones or the keyboard over it.
+- **Parts.** Each part has an on/off dot and a volume:
+  - Chords: their sound (any of the sounds above), a playing style (held,
+    every beat, eighths, a down-down-up-up-down-up strum, arpeggio up, up and
+    down) and a voicing. **Smooth** voice-leads: each chord takes the
+    inversion that moves the fewest semitones from the one before, as a
+    pianist would play it. **Root position** plays every chord from its root.
+  - Bass: its sound and pattern (held roots, every beat, eighths, root and
+    fifth, octaves), in a bass guitar's first octave, E1 to D♯2. Switch it off
+    to play the bass line yourself.
+  - Drums: click, pop, rock, half-time ballad, hip-hop or four on the floor.
+- **Export.** Pick how many times round (1, 2, 4 or 8), then:
+  - **WAV**: the mix as a 24-bit, 48 kHz stereo file. It loops seamlessly:
+    it starts with the tail the last chord leaves when the loop comes round,
+    so it can go straight onto a looping clip.
+  - **Stems**: one WAV per part (chords, bass, drums), lined up, in a ZIP.
+  - **MIDI**: a tempo track and one track per part, with each sound's General
+    MIDI instrument and the drums on channel 10, ready to put on your own
+    instruments in the DAW.
+
+  Parts that are switched off are left out. The audio is rendered offline in
+  the browser from the same sounds you hear, which takes a few seconds.
+- **Saving.** **Save…** stores the progression under a name in this browser:
+  its key, chords, tempo, sounds and parts. The menu next to it opens a saved
+  one, or starts a new progression in the same key and sounds; saving an open
+  one updates it, **Save as new** keeps both.
+
 ## Project layout
 
 ```
 index.html            page structure
 style.css             all styling (dark and light theme, single accent colour)
 app.js                audio setup, device handling, rendering, reference tone, tempo UI and
-                      metronome sound, Record mode, file loading and the report
+                      metronome sound, Record mode, file loading and the report, Sound lab
 pitch.js              pitch detection (McLeod Pitch Method) and note maths
 tunings.js            the instruments and their tunings, and the note notation custom tunings use
 tempo.js              tap-tempo estimation, note lengths, typed-tempo parsing
@@ -230,6 +356,9 @@ analysis-worker.js    runs analysis.js off the main thread
 report.js             statuses, target ranges, explanations and the summary of the analysis
 recorder.js           meter ballistics, level advice, WAV encoding, room-noise verdict
 recorder-worklet.js   AudioWorklet that meters every sample and captures takes
+tones.js              Sound lab's maths: intervals, chord names and spelling, experiments, waves
+instruments.js        Sound lab's synthesised sounds and drums, the mix, and offline rendering
+song.js               progressions: keys and numerals, voicing, styles, bass, drums, MIDI and ZIP
 sw.js                 service worker: offline support (network first, cache as fallback)
 manifest.webmanifest  install metadata; icons/ holds the app icons
 serve.js              dependency-free static server for local use
@@ -237,9 +366,9 @@ test/                 unit tests for the scripts above, plus a check that sw.js 
 docs/                 screenshots
 ```
 
-`pitch.js`, `tunings.js`, `tempo.js`, `metronome.js`, `analysis.js`, `report.js`
-and `recorder.js` are plain scripts that also work under `require()`, which is how
-the tests load them. When the page starts loading a new file, add it to the
+`pitch.js`, `tunings.js`, `tempo.js`, `metronome.js`, `analysis.js`, `report.js`,
+`recorder.js`, `tones.js`, `instruments.js` and `song.js` are plain scripts that also
+work under `require()`, which is how the tests load them. When the page starts loading a new file, add it to the
 `FILES` list in `sw.js` (the tests fail until you do).
 
 ## Tests
@@ -267,7 +396,22 @@ jumps, rumble, plosives, sibilance and 50/60 Hz hum through every measurement.
 The report tests cover the thresholds and the ordering of the advice. The
 recorder tests check the meter's ballistics, the level advice, that WAV files
 round-trip sample for sample and parse with the analysis's own header reader,
-and the room-noise verdict on synthetic hiss, hum and silence.
+and the room-noise verdict on synthetic hiss, hum and silence. The tones tests
+check that chords are named through voicings, doublings and inversions, and
+every chord on every root as itself; the spelling (C♭ where it belongs, no
+double flats); interval sizes against their pure ratios; typed frequencies and
+notes; stepping between notes; the slider scale; beating; the experiments; the
+wave shapes; and that the mix never exceeds full scale. The instruments tests
+build every sound at a low, middle and high pitch against a strict stand-in
+for the Web Audio API that rejects NaN values, missing starts and unfinished
+notes, check that every note stops after its release, and run the plucked
+string through the tuner's own pitch detector: it must ring within 3 cents of
+its pitch and die away. The song tests check keys and Roman numerals, every
+famous progression against its name, textbook voice leading (C–G–Am–F as C E
+G → B D G → C E A → C F A), every playing style staying inside its block, bass
+patterns and drum grooves, a MIDI file read back byte by byte, a ZIP with a
+known checksum, and that stored loops and songs are repaired rather than
+trusted.
 
 ## Ideas for what to build next
 
@@ -294,10 +438,10 @@ roughly in the order they'd be useful:
 
 **Studio utilities**
 
-- **Test signal generator** — sine, pink and white noise, sweeps — for
-  checking headphones, monitors and the room.
+- **Test signal generator** — pink and white noise and sweeps, next to Sound
+  lab's steady tones — for checking headphones, monitors and the room.
 - **Frequency cheat sheet** — instrument ranges, EQ trouble spots and a
-  note ↔ Hz ↔ MIDI converter that can play any note.
+  note ↔ Hz ↔ MIDI converter.
 - **Session notes** — BPM, key, tuning and capo per song, saved locally.
 
 **The app itself**

@@ -28,6 +28,7 @@
           <button type="button" class="seg" role="tab" aria-selected="false" data-mode="tempo">Tempo</button>
           <button type="button" class="seg" role="tab" aria-selected="false" data-mode="record">Record</button>
           <button type="button" class="seg" role="tab" aria-selected="false" data-mode="analysis">Analysis</button>
+          <button type="button" class="seg" role="tab" aria-selected="false" data-mode="lab">Sound lab</button>
         </div>
         <div class="bar-actions">
           <button type="button" class="ghost icon toggle tuner-only" id="tone" aria-pressed="false" aria-label="Reference tone" title="Reference tone: click a string to hear it">
@@ -39,6 +40,7 @@
           <button type="button" class="ghost input-only running-only" id="stop" title="Stop listening to the input">Stop</button>
           <button type="button" class="ghost tempo-only" id="tempo-reset">Reset</button>
           <button type="button" class="ghost analysis-only report-only" id="analysis-new">New file</button>
+          <button type="button" class="ghost lab-only" id="lab-clear" title="Remove every tone">Clear</button>
           <button type="button" class="ghost icon" id="theme" aria-label="Theme">
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -71,7 +73,15 @@
             </button>
           </div>
         </div>
-        <div class="field tuner-only">
+        <div class="field lab-only">
+          <label for="wave">Sound</label>
+          <select id="wave" title="The wave shape every tone plays with: soft is the tuner’s reference tone, sine is pure, the others get brighter"></select>
+        </div>
+        <div class="field lab-only">
+          <label for="volume">Volume</label>
+          <div class="range-field"><input type="range" id="volume" min="0" max="100" step="1"></div>
+        </div>
+        <div class="field pitch-only">
           <label id="a4-label">A4</label>
           <div class="stepper" role="group" aria-labelledby="a4-label">
             <button type="button" id="a4-down" aria-label="Lower reference pitch">−</button>
@@ -237,6 +247,175 @@
         </section>
       </div>
 
+      <div class="view lab-only" id="lab-view">
+        <section class="display lab-display">
+          <!-- Fixed heights: a note, a long interval name or a chord never moves what is below. -->
+          <div class="chord-box"><div class="chord" id="lab-name">—</div></div>
+          <div class="freq lab-detail" id="lab-detail" aria-live="polite"></div>
+          <div class="lab-song" id="lab-song"></div>
+          <div class="lab-controls">
+            <button type="button" class="play" id="lab-play" aria-pressed="false">
+              <span class="play-icon" aria-hidden="true"></span><span id="lab-play-label">Play</span>
+            </button>
+            <button type="button" class="play" id="lab-arp" aria-pressed="false" title="Plays the tones one after another, lowest first, then all together">
+              <svg class="arp-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M1.5 13h3.5M6.25 8.5h3.5M11 4h3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>Arpeggio
+            </button>
+          </div>
+        </section>
+
+        <section class="scope-wrap">
+          <svg class="scope" id="scope" viewBox="0 0 800 120" preserveAspectRatio="none" role="img" aria-label="Waveform of the tones together"></svg>
+          <span class="scope-span" id="scope-span" aria-hidden="true"></span>
+        </section>
+
+        <section class="piano" aria-label="Keyboard">
+          <button type="button" class="ghost icon" id="keys-down" aria-label="Show an octave lower">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4.5L6.5 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="keys" id="keys"></div>
+          <button type="button" class="ghost icon" id="keys-up" aria-label="Show an octave higher">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4.5l5.5 5.5L8 15.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </section>
+        <div class="hint lab-hint" id="lab-hint" aria-live="polite"></div>
+
+        <section class="progression" aria-labelledby="prog-title">
+          <header class="section-head">
+            <h2 id="prog-title">Progression</h2>
+            <div class="prog-songs">
+              <select id="song-list" aria-label="Saved progressions"></select>
+              <button type="button" class="ghost small" id="song-save">Save…</button>
+            </div>
+          </header>
+
+          <div class="prog-row">
+            <div class="field">
+              <label for="key-tonic">Key</label>
+              <div class="field-row">
+                <select id="key-tonic" class="key-select"></select>
+                <select id="key-mode" class="mode-select">
+                  <option value="major">Major</option>
+                  <option value="minor">Minor</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="prog-start">Start from</label>
+              <select id="prog-start" class="start-select"></select>
+            </div>
+            <label class="check" title="Seventh chords in the key's palette">
+              <input type="checkbox" id="key-sevenths"><span>7th chords</span>
+            </label>
+          </div>
+
+          <div class="palette" id="palette" role="group" aria-label="Chords in this key"></div>
+
+          <ol class="timeline" id="timeline" aria-label="Chord loop"></ol>
+          <p class="hint timeline-hint" id="timeline-hint" aria-live="polite"></p>
+
+          <div class="prog-row transport">
+            <button type="button" class="play" id="loop-play" aria-pressed="false">
+              <span class="play-icon" aria-hidden="true"></span><span id="loop-play-label">Play loop</span>
+            </button>
+            <div class="stepper" role="group" aria-label="Tempo">
+              <button type="button" id="loop-bpm-down" aria-label="Slower by 1 bpm">−</button>
+              <input type="text" id="loop-bpm" class="bpm-field" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="Tempo in beats per minute" title="Tempo, shared with the Tempo tab">
+              <span class="word">bpm</span>
+              <button type="button" id="loop-bpm-up" aria-label="Faster by 1 bpm">+</button>
+            </div>
+            <span class="loop-length" id="loop-length"></span>
+            <div class="loop-tools">
+              <button type="button" class="ghost small" id="block-add" title="Adds the chord the tones above make, after the selected block">Add sounding chord</button>
+              <button type="button" class="ghost small" id="loop-undo" title="Undo (Ctrl+Z)">Undo</button>
+              <button type="button" class="ghost small" id="loop-clear">Clear</button>
+            </div>
+          </div>
+
+          <div class="parts">
+            <div class="part">
+              <button type="button" class="voice-on" data-part="chords" aria-label="Chords sound" title="Switch the chords on or off"></button>
+              <span class="part-name">Chords</span>
+              <select id="chords-sound" aria-label="Chord sound"></select>
+              <select id="chords-style" aria-label="Playing style"></select>
+              <select id="chords-voicing" aria-label="Voicing" title="Smooth: each chord in the inversion closest to the one before"></select>
+              <input type="range" id="chords-volume" min="0" max="100" step="1" aria-label="Chord volume">
+            </div>
+            <div class="part">
+              <button type="button" class="voice-on" data-part="bass" aria-label="Bass sounds" title="Switch the bass off to play along"></button>
+              <span class="part-name">Bass</span>
+              <select id="bass-sound" aria-label="Bass sound"></select>
+              <select id="bass-pattern" aria-label="Bass pattern"></select>
+              <span></span>
+              <input type="range" id="bass-volume" min="0" max="100" step="1" aria-label="Bass volume">
+            </div>
+            <div class="part">
+              <button type="button" class="voice-on" data-part="drums" aria-label="Drums sound" title="Switch the drums on or off"></button>
+              <span class="part-name">Drums</span>
+              <select id="drums-pattern" aria-label="Drum groove"></select>
+              <span></span>
+              <span></span>
+              <input type="range" id="drums-volume" min="0" max="100" step="1" aria-label="Drum volume">
+            </div>
+          </div>
+
+          <div class="prog-row export">
+            <span class="tool-label">Export</span>
+            <select id="export-repeats" aria-label="Times round"></select>
+            <button type="button" class="ghost small" id="export-wav" title="The mix as a 24-bit WAV that loops seamlessly">WAV</button>
+            <button type="button" class="ghost small" id="export-stems" title="Chords, bass and drums as separate WAV files, in one ZIP">Stems</button>
+            <button type="button" class="ghost small" id="export-midi" title="Chords, bass and drums as MIDI tracks for your DAW">MIDI</button>
+            <span class="export-status" id="export-status" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <section class="voices" aria-labelledby="voices-title">
+          <header class="section-head">
+            <h2 id="voices-title">Tones <span class="voice-count" id="voice-count"></span></h2>
+            <div class="voice-tools">
+              <span class="tool-label">Transpose</span>
+              <div class="stepper small" role="group" aria-label="Transpose every tone by a semitone">
+                <button type="button" id="semi-down" aria-label="Every tone a semitone down">−</button>
+                <span class="word">Semitone</span>
+                <button type="button" id="semi-up" aria-label="Every tone a semitone up">+</button>
+              </div>
+              <div class="stepper small" role="group" aria-label="Transpose every tone by an octave">
+                <button type="button" id="oct-down" aria-label="Every tone an octave down">−</button>
+                <span class="word">Octave</span>
+                <button type="button" id="oct-up" aria-label="Every tone an octave up">+</button>
+              </div>
+              <button type="button" class="ghost small" id="voice-add">Add tone</button>
+            </div>
+          </header>
+          <ol class="voice-list" id="voice-list"></ol>
+          <p class="voices-empty" id="voices-empty" hidden>No tones yet. Add one, click a key, or pick a chord below.</p>
+        </section>
+
+        <section class="library" aria-labelledby="library-title">
+          <header class="section-head">
+            <h2 id="library-title">Chords, intervals &amp; experiments</h2>
+          </header>
+          <div class="lib-roots">
+            <div class="roots" id="roots" role="group" aria-label="Root note"></div>
+            <div class="lib-octave">
+              <span class="tool-label" id="lib-octave-label">Octave</span>
+              <div class="stepper small" role="group" aria-labelledby="lib-octave-label">
+                <button type="button" id="lib-octave-down" aria-label="Root an octave lower">−</button>
+                <span id="lib-octave">4</span>
+                <button type="button" id="lib-octave-up" aria-label="Root an octave higher">+</button>
+              </div>
+            </div>
+          </div>
+          <div id="lib-groups"></div>
+          <section class="explain" id="explain" aria-live="polite" hidden>
+            <h3 id="explain-title"></h3>
+            <p id="explain-text"></p>
+            <p class="explain-song" id="explain-song" hidden></p>
+          </section>
+        </section>
+      </div>
+
       <div class="overlay" id="overlay">
         <div class="card">
           <svg class="logo tuner-only" viewBox="0 0 32 32" aria-hidden="true">
@@ -283,6 +462,23 @@
     </form>
   </dialog>
 
+  <dialog class="dialog" id="song-dialog" aria-labelledby="song-dialog-title">
+    <form id="song-form">
+      <h2 id="song-dialog-title">Save progression</h2>
+      <label class="dlg-field">
+        <span>Name</span>
+        <input type="text" id="song-name" maxlength="60" autocomplete="off">
+      </label>
+      <p class="dlg-help">Saved in this browser with its key, chords, tempo, sounds and parts.</p>
+      <div class="dlg-actions">
+        <button type="button" class="ghost danger" id="song-delete">Delete</button>
+        <button type="button" class="ghost" id="song-cancel">Cancel</button>
+        <button type="button" class="ghost" id="song-save-new">Save as new</button>
+        <button type="submit" class="primary small" id="song-save-ok">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="pitch.js"></script>
   <script src="tunings.js"></script>
   <script src="tempo.js"></script>
@@ -290,6 +486,9 @@
   <script src="analysis.js"></script>
   <script src="report.js"></script>
   <script src="recorder.js"></script>
+  <script src="tones.js"></script>
+  <script src="instruments.js"></script>
+  <script src="song.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
